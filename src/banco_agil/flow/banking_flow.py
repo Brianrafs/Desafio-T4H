@@ -8,6 +8,7 @@ from banco_agil.models.agent_outputs import (
     OUTPUT_TYPES,
     CreditTurnResult,
     ExchangeTurnResult,
+    InterviewTurnResult,
     TriageTurnResult,
     TurnResult,
 )
@@ -17,6 +18,7 @@ from banco_agil.models.state import (
     AgentType,
     AuthenticationContext,
     ConversationStatus,
+    CreditInterviewContext,
     IntentType,
     SessionState,
     TransitionIntent,
@@ -73,6 +75,7 @@ class BankingFlow(Flow[SessionState]):
             raise LLMStructuredOutputError()
         if (
             result.end_requested
+            or getattr(result, "transition_request", None) == TransitionIntent.END_CONVERSATION
             or getattr(result, "detected_intent", None) == IntentType.END_CONVERSATION
         ):
             transition(self.state, self._tools.end_conversation())
@@ -142,6 +145,8 @@ class BankingFlow(Flow[SessionState]):
             return await self._credit(result)
         if self.state.current_agent == AgentType.EXCHANGE:
             return await self._exchange(result)
+        if self.state.current_agent == AgentType.INTERVIEW:
+            return await self._interview(result)
         raise LLMStructuredOutputError()
 
     @staticmethod
@@ -158,10 +163,22 @@ class BankingFlow(Flow[SessionState]):
         if result.transition_request not in (None, TransitionIntent.START_CREDIT_INTERVIEW):
             transition(self.state, result.transition_request)
         credit = self.state.credit
+        if result.interview_accepted is True:
+            transition(self.state, TransitionIntent.START_CREDIT_INTERVIEW, accepted=True)
+            credit.awaiting_interview_confirmation = False
+            self.state.interview = CreditInterviewContext()
+            return self._interview_question()
+        if result.transition_request == TransitionIntent.START_CREDIT_INTERVIEW:
+            # Pedir a transição sem aceite explícito não autoriza iniciar a entrevista.
+            transition(self.state, result.transition_request, accepted=False)
+        if result.interview_accepted is False and credit.awaiting_interview_confirmation:
+            credit.awaiting_interview_confirmation = False
+            return "Tudo bem. Posso ajudar com uma consulta de limite ou de cotação."
         if result.detected_intent == IntentType.CREDIT_LIMIT_QUERY:
             return f"Seu limite atual é {self._money(self._tools.get_credit_limit())}."
         if result.detected_intent == IntentType.CREDIT_LIMIT_INCREASE:
             credit.awaiting_requested_limit = True
+            credit.requested_limit = result.requested_limit
         if result.requested_limit is not None:
             credit.requested_limit = result.requested_limit
             credit.awaiting_requested_limit = True
@@ -170,6 +187,35 @@ class BankingFlow(Flow[SessionState]):
                 return "Qual novo limite total você deseja solicitar?"
             return self._evaluate_credit()
         return "Você quer consultar seu limite ou solicitar um aumento?"
+
+    def _interview_question(self) -> str:
+        questions = {
+            "monthly_income": "Qual é sua renda mensal?",
+            "employment_type": "Você tem emprego formal, é autônomo ou está desempregado?",
+            "fixed_expenses": "Qual é o total das suas despesas fixas mensais?",
+            "dependents": "Quantos dependentes você tem?",
+            "has_active_debt": "Você tem alguma dívida ativa? Responda sim ou não.",
+        }
+        return questions[self.state.interview.next_missing_field()]
+
+    async def _interview(self, result: InterviewTurnResult) -> str:
+        interview = self.state.interview
+        if interview is None:
+            raise LLMStructuredOutputError()
+        field = interview.next_missing_field()
+        if field is not None:
+            value = getattr(result, field)
+            if value is None:
+                return self._interview_question()
+            setattr(interview, field, value)
+        if not interview.is_complete():
+            return self._interview_question()
+        self._tools.submit_credit_interview()
+        interview.score_persisted = True
+        interview.completed = True
+        transition(self.state, TransitionIntent.RETURN_TO_CREDIT)
+        self.state.credit.awaiting_requested_limit = True
+        return "Entrevista concluída. " + self._evaluate_credit()
 
     def _evaluate_credit(self) -> str:
         credit = self.state.credit
