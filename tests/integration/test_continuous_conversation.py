@@ -65,3 +65,24 @@ async def test_follow_up_has_last_reply_without_old_credentials(data_dir):
     assert "00000000001" not in json.dumps(messages)
     assert "1990-01-15" not in json.dumps(messages)
     assert flow.state.current_agent == "triage"
+
+
+async def test_json_failure_keeps_authenticated_session_and_last_question(data_dir):
+    flow = BankingFlow(data_dir)
+    await flow.process(
+        TriageTurnResult(
+            cpf="00000000001", birth_date="1990-01-15", detected_intent="credit_limit_increase"
+        )
+    )
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(400, json={"error": {"code": "json_validate_failed"}})
+    )
+    conversation = Conversation(flow, GroqProvider("test", "test", flow.tools, transport))
+    conversation.last_reply = "Qual limite total você deseja?"
+    await conversation.send("Quero dois mil")
+    assert flow.state.authenticated
+    assert flow.state.current_agent == "credit"
+    assert flow.state.credit.awaiting_requested_limit
+    assert flow.state.last_error_code == "invalid_llm_output"
+    assert conversation.last_reply == "Qual limite total você deseja?"
+    assert flow.tools.credit.requests.read() == []

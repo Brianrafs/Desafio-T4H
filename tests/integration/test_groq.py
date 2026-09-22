@@ -130,3 +130,20 @@ async def test_other_http_errors_do_not_retry(data_dir, status):
             "test", "test", BankingFlow(data_dir).tools, httpx.MockTransport(respond)
         ).interpret("oi", SessionState())
     assert len(calls) == 1
+
+
+async def test_truncated_generation_retries_within_same_budget(data_dir):
+    calls = []
+
+    def respond(request):
+        calls.append(request)
+        choice = {"message": {"content": "{}"}, "finish_reason": "length"}
+        if len(calls) == 2:
+            choice["finish_reason"] = "stop"
+        return httpx.Response(200, json={"choices": [choice]})
+
+    result = await GroqProvider(
+        "test", "test", BankingFlow(data_dir).tools, httpx.MockTransport(respond)
+    ).interpret("oi", SessionState())
+    assert result.message == ""
+    assert len(calls) == 2
