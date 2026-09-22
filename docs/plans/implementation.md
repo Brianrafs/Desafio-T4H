@@ -42,10 +42,18 @@ A especificação de referência é `2026-09-22-banco-agil-design.md`. Cada etap
 
 As etapas 1–16 foram implementadas e registradas em commits separados por funcionalidade. A documentação da etapa 17 está em `README.md`.
 
-- 113 testes automatizados passaram, incluindo os fluxos pela interface com AppTest.
+- 138 testes automatizados passaram após os ajustes da Lia, incluindo os fluxos pela interface com AppTest.
 - Ruff passou para `src`, `tests` e `app.py`.
 - A integração dos agentes foi exercitada com CrewAI real e respostas HTTP simuladas.
 - A instalação em um segundo ambiente virtual limpo passou com `uv sync --locked --offline`, usando o cache local; os 113 testes e o Ruff também passaram nesse ambiente.
 - Uma consulta manual real de USD à AwesomeAPI retornou cotação e horário.
-- A demonstração com a Groq real permanece pendente de credencial; não é substituída pelos testes simulados.
+- A demonstração manual com Groq real foi executada com autorização do usuário, dados financeiros fictícios e autenticação exclusivamente local, sem enviar CPF ou nascimento à API. Foram validados entrevista, reanálise, câmbio e continuidade.
 - O histórico inclui correções para preservar etapas concluídas após falhas e a conexão das tools CrewAI executáveis ao Flow.
+
+## Ajustes solicitados nos testes da aplicação
+
+- Separar o contrato JSON da Groq das instruções ReAct do CrewAI; tratar `json_validate_failed` como falha estruturada com uma única repetição.
+- Retornar à triagem após operações concluídas, preservando a identidade autenticada. Esta transição interna amplia a matriz da especificação original conforme o pedido de continuidade do usuário.
+- Usar a última resposta como contexto mínimo para mensagens curtas, sem reenviar credenciais anteriores.
+- Apresentar a assistente como **Lia**, com acolhimento contextual, Markdown, opções visíveis e atalhos de serviços.
+- Manter os resultados financeiros determinísticos e distinguir limite de uso da API de falha na interpretação.

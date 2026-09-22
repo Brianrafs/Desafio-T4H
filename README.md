@@ -2,6 +2,8 @@
 
 Atendimento bancário conversacional com quatro especialistas CrewAI, estado explícito e regras financeiras determinísticas. A interface Streamlit reúne autenticação, crédito, entrevista financeira e câmbio em uma conversa contínua.
 
+A assistente se chama **Lia** em todas as etapas. Suas mensagens usam Markdown, acolhimento contextual e opções claras. Ao concluir uma consulta, aprovar um pedido ou recusar a entrevista, ela apresenta os próximos serviços e preserva a autenticação. Atalhos no chat permitem consultar limite, pedir aumento ou escolher uma cotação.
+
 ## Requisitos e instalação
 
 - Python 3.13.
@@ -87,12 +89,14 @@ flowchart TD
 ```
 
 - **Agents:** triagem, crédito, entrevista e câmbio têm responsabilidades, schemas e conjuntos de tools próprios. Não recebem o CPF autenticado no contexto do prompt nem tabelas de decisão financeira.
-- **GroqProvider:** usa `BaseLLM` do CrewAI com HTTP via `httpx`, temperatura 0,2 e JSON validado localmente. Há no máximo duas chamadas por turno: uma inicial e uma repetição por output inválido. HTTP 429 não é repetido.
+- **GroqProvider:** usa `BaseLLM` do CrewAI com HTTP via `httpx`, temperatura 0,2 e JSON validado localmente. A API recebe um contrato JSON separado do prompt ReAct do executor. Há no máximo duas chamadas por turno: a inicial e uma repetição por output inválido, geração truncada ou HTTP 400 com `json_validate_failed`. Outros erros HTTP não são repetidos. HTTP 429 recebe a classificação `llm_rate_limited` e uma orientação para aguardar, preservando a sessão.
 - **Tools:** as mesmas tools tipadas são vinculadas aos agentes e ao Flow. Na fase de interpretação, executar uma tool é recusado. Após validar o turno, o Flow libera a chamada; a tool delega ao service e verifica novamente sessão, agente e etapa. O modelo não pode fornecer CPF a operações de crédito.
 - **Flow:** preserva intenção antes da autenticação, controla a matriz de transições, aceita somente o campo aguardado na entrevista e reanalisa automaticamente o valor anterior. Não depende de frases exatas do LLM. Respostas operacionais usam resultados determinísticos para exibir valores e decisões.
 - **Services:** comparam credenciais, avaliam crédito, calculam score e consultam câmbio. Valores monetários usam `Decimal`.
 - **Repositories:** validam os CSVs e escrevem arquivos temporários no mesmo diretório, com `flush`, `fsync` e `os.replace`.
 - **Sessão:** autenticação e progresso ficam no `SessionState`; o histórico exibido fica em `st.session_state.messages`. Nenhum dos dois substitui a persistência do domínio.
+
+O retorno `return_to_triage` só é autorizado pelo Flow ao concluir a operação, sem campos pendentes. Rejeições continuam na etapa de crédito aguardando aceite da entrevista. A última resposta da Lia acompanha a mensagem atual para dar contexto a respostas curtas; credenciais de turnos anteriores não são reenviadas. A frase de acolhimento pode variar com a mensagem do cliente; valores, decisões e próximos passos são apresentados a partir do resultado confirmado pelo Flow.
 
 ### Crédito e recuperação de falhas
 
@@ -140,13 +144,15 @@ Os testes não precisam de chaves ou internet. Usam CSVs temporários, `httpx.Mo
 
 Os avisos de depreciação emitidos internamente pelo CrewAI 1.15.22 são mantidos visíveis. As versões resolvidas estão em `uv.lock`.
 
-Validação em 22/09/2026: 113 testes passaram, Ruff e formatação passaram, e a instalação foi repetida em um ambiente virtual novo com `uv sync --locked --offline` usando o cache local. Uma consulta manual real de USD à AwesomeAPI retornou cotação positiva e horário; essa consulta não faz parte da suíte automatizada.
+Validação inicial em 22/09/2026: 113 testes passaram em um segundo ambiente virtual criado com `uv sync --locked --offline`. Após os ajustes da Lia, **138 testes passaram**, assim como Ruff e formatação. A suíte inclui regressões de `json_validate_failed`, truncamento, limites de tentativas, preservação da sessão e múltiplas operações sem nova autenticação.
+
+Com autorização do usuário, um cenário manual fictício foi executado com a Groq real e a AwesomeAPI: consulta, rejeição, cinco respostas de entrevista, reanálise aprovada, cotação de EUR, nova consulta e encerramento. O cenário usou CSVs temporários e autenticação local, sem enviar CPF ou nascimento ao provedor. As chamadas foram espaçadas; uma tentativa anterior teve uma falha externa isolada, sem perda da sessão. Esses testes manuais não integram a suíte automatizada.
 
 ## Limitações e validação externa
 
 - MVP demonstrável com CSVs; não usar como sistema bancário de produção.
 - Escritas concorrentes entre sessões não são suportadas.
-- O teste automatizado da UI usa integrações simuladas. A demonstração da conversa com a Groq real ainda precisa ser executada com uma credencial válida; não havia `GROQ_API_KEY` configurada durante a implementação.
+- O teste automatizado da UI usa integrações simuladas. O teste manual real cobriu os turnos após autenticação local; a coleta de CPF e nascimento pela Groq não foi incluída nesse cenário.
 - Não há banco transacional, painel administrativo, tracing distribuído ou autenticação de produção.
 
 ## Desenvolvimento
