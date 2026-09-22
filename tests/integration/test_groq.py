@@ -1,0 +1,60 @@
+import json
+
+import httpx
+import pytest
+
+from banco_agil.agents.factory import create_agent
+from banco_agil.models.errors import LLMError, LLMStructuredOutputError
+from banco_agil.models.state import AgentType, SessionState
+from banco_agil.providers.groq import GroqLLM, GroqProvider
+from banco_agil.tools.session_tools import TOOL_SCOPES
+
+
+@pytest.mark.parametrize("kind", list(AgentType))
+def test_agent_tool_scopes(kind):
+    agent = create_agent(kind, GroqLLM("test", "test"))
+    assert {tool.name for tool in agent.tools} == set(TOOL_SCOPES[kind])
+    assert not agent.allow_delegation
+    assert "unauthorized" in agent.tools[0]._run()
+
+
+@pytest.mark.parametrize(
+    "outputs,expected_calls,error",
+    [
+        ([{"cpf": "00000000001"}], 1, None),
+        ([{"unknown": 1}, {"cpf": "00000000001"}], 2, None),
+        ([{"unknown": 1}, {"unknown": 2}], 2, LLMStructuredOutputError),
+    ],
+)
+async def test_actual_agent_with_mocked_groq(outputs, expected_calls, error):
+    calls = []
+
+    def respond(request):
+        calls.append(json.loads(request.content))
+        assert calls[-1]["response_format"] == {"type": "json_object"}
+        return httpx.Response(
+            200, json={"choices": [{"message": {"content": json.dumps(outputs[len(calls) - 1])}}]}
+        )
+
+    provider = GroqProvider("test", "groq/test", httpx.MockTransport(respond))
+    if error:
+        with pytest.raises(error):
+            await provider.interpret("Meu CPF é 00000000001", SessionState())
+    else:
+        result = await provider.interpret("Meu CPF é 00000000001", SessionState())
+        assert result.cpf == "00000000001"
+    assert len(calls) == expected_calls
+
+
+async def test_rate_limit_no_retry():
+    calls = []
+
+    def respond(request):
+        calls.append(request)
+        return httpx.Response(429)
+
+    with pytest.raises(LLMError):
+        await GroqProvider("test", "test", httpx.MockTransport(respond)).interpret(
+            "oi", SessionState()
+        )
+    assert len(calls) == 1
