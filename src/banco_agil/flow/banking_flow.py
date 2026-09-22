@@ -23,6 +23,7 @@ from banco_agil.models.state import (
     SessionState,
     TransitionIntent,
 )
+from banco_agil.observability import Event, configure_logging, record
 from banco_agil.repositories.customer_repository import CustomerRepository
 from banco_agil.services.authentication_service import AuthenticationService
 from banco_agil.services.credit_service import CreditService
@@ -36,6 +37,7 @@ class BankingFlow(Flow[SessionState]):
     _turn_result: TurnResult | None = PrivateAttr(default=None)
 
     def __init__(self, data_dir: Path, exchange: ExchangeService | None = None, **kwargs):
+        configure_logging()
         super().__init__(
             initial_state=SessionState(), tracing=False, suppress_flow_events=True, **kwargs
         )
@@ -48,6 +50,7 @@ class BankingFlow(Flow[SessionState]):
             ScoreService(customers, credit),
             exchange or ExchangeService(),
         )
+        record(Event.SESSION_STARTED, self.state.session_id)
 
     async def process(self, result: TurnResult) -> str:
         if self.state.status == ConversationStatus.FINISHED:
@@ -64,6 +67,7 @@ class BankingFlow(Flow[SessionState]):
             for name in SessionState.model_fields:
                 setattr(self.state, name, getattr(snapshot, name))
             self.state.last_error_code = exc.code
+            record(Event.OPERATION_FAILED, self.state.session_id, error_code=exc.code)
             return exc.user_message
         finally:
             self._turn_result = None
@@ -106,6 +110,7 @@ class BankingFlow(Flow[SessionState]):
             )
             state.authentication = AuthenticationContext()
             if customer is None:
+                record(Event.AUTHENTICATION_FAILED, state.session_id)
                 state.authentication_attempts += 1
                 if state.authentication_attempts >= 3:
                     transition(state, TransitionIntent.END_CONVERSATION)
@@ -117,6 +122,7 @@ class BankingFlow(Flow[SessionState]):
             state.authenticated_customer_cpf = customer.cpf
             state.authenticated = True
             state.authentication_attempts = 0
+            record(Event.AUTHENTICATION_SUCCEEDED, state.session_id)
         return await self._resume_intent()
 
     async def _resume_intent(self) -> str:
@@ -213,6 +219,7 @@ class BankingFlow(Flow[SessionState]):
         self._tools.submit_credit_interview()
         interview.score_persisted = True
         interview.completed = True
+        record(Event.CREDIT_SCORE_UPDATED, self.state.session_id)
         transition(self.state, TransitionIntent.RETURN_TO_CREDIT)
         self.state.credit.awaiting_requested_limit = True
         return "Entrevista concluída. " + self._evaluate_credit()
@@ -221,6 +228,7 @@ class BankingFlow(Flow[SessionState]):
         credit = self.state.credit
         result = self._tools.request_credit_limit_increase(credit.requested_limit)
         credit.last_request_status = result.status_pedido
+        record(Event.CREDIT_REQUEST_EVALUATED, self.state.session_id, status=result.status_pedido)
         credit.awaiting_requested_limit = False
         credit.awaiting_interview_confirmation = (
             result.status_pedido == CreditRequestStatus.REJECTED

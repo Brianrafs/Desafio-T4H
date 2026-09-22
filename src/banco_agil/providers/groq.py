@@ -9,6 +9,7 @@ from pydantic import PrivateAttr, SecretStr, ValidationError
 from banco_agil.models.agent_outputs import OUTPUT_TYPES, TurnResult
 from banco_agil.models.errors import LLMError, LLMStructuredOutputError
 from banco_agil.models.state import SessionState
+from banco_agil.observability import configure_logging
 
 
 class LLMProvider(Protocol):
@@ -89,6 +90,7 @@ class GroqProvider:
     async def interpret(self, message: str, state: SessionState) -> TurnResult:
         from banco_agil.agents.factory import create_agent
 
+        configure_logging()
         output = OUTPUT_TYPES[state.current_agent]
         llm = GroqLLM(self._api_key, self.model, self.transport)
         # Contexto mínimo: o CPF autenticado e os dados financeiros nunca vão ao prompt.

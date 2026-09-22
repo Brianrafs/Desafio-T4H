@@ -5,6 +5,7 @@ from decimal import Decimal
 from banco_agil.models.domain import FinancialProfile, SupportedCurrency
 from banco_agil.models.errors import AuthorizationError
 from banco_agil.models.state import AgentType, ConversationStatus, SessionState, TransitionIntent
+from banco_agil.observability import Event, record
 from banco_agil.services.authentication_service import AuthenticationService
 from banco_agil.services.credit_service import CreditService
 from banco_agil.services.exchange_service import ExchangeService
@@ -46,6 +47,7 @@ class SessionTools:
         state = self._authorize("authenticate_customer", protected=False)
         if state.authenticated or state.authentication_attempts >= 3:
             raise AuthorizationError()
+        record(Event.AUTHENTICATION_ATTEMPT, state.session_id)
         return self.authentication.authenticate(cpf, birth_date)
 
     def get_credit_limit(self):
@@ -59,6 +61,7 @@ class SessionTools:
             or state.credit.requested_limit != requested_limit
         ):
             raise AuthorizationError()
+        record(Event.CREDIT_LIMIT_REQUESTED, state.session_id)
         return self.credit.request_increase(state.authenticated_customer_cpf, requested_limit)
 
     def submit_credit_interview(self):
@@ -72,7 +75,8 @@ class SessionTools:
         return self.score.submit(state.authenticated_customer_cpf, profile)
 
     async def get_exchange_rate(self, currency: SupportedCurrency):
-        self._authorize("get_exchange_rate")
+        state = self._authorize("get_exchange_rate")
+        record(Event.EXCHANGE_RATE_REQUESTED, state.session_id)
         return await self.exchange.get_exchange_rate(currency)
 
     def end_conversation(self):

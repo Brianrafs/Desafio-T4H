@@ -5,6 +5,7 @@ from banco_agil.models.state import (
     SessionState,
     TransitionIntent,
 )
+from banco_agil.observability import Event, record
 
 DESTINATIONS = {
     TransitionIntent.GO_TO_CREDIT: AgentType.CREDIT,
@@ -18,5 +19,7 @@ def transition(state: SessionState, intent: TransitionIntent, *, accepted=False)
     validate_transition(state, intent, accepted=accepted)
     if intent == TransitionIntent.END_CONVERSATION:
         state.status = ConversationStatus.FINISHED
+        record(Event.CONVERSATION_FINISHED, state.session_id)
     else:
         state.current_agent = DESTINATIONS[intent]
+        record(Event.AGENT_TRANSITION, state.session_id, agent=state.current_agent)

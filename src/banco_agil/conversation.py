@@ -2,6 +2,7 @@ from banco_agil.flow.banking_flow import BankingFlow
 from banco_agil.models.agent_outputs import OUTPUT_TYPES
 from banco_agil.models.errors import LLMError
 from banco_agil.models.state import ConversationStatus
+from banco_agil.observability import Event, record
 from banco_agil.providers.groq import LLMProvider
 
 
@@ -29,5 +30,6 @@ class Conversation:
                 )
             except LLMError as exc:
                 self.flow.state.last_error_code = exc.code
+                record(Event.EXTERNAL_API_FAILED, self.flow.state.session_id, error_code=exc.code)
                 return exc.user_message
         return await self.flow.process(result)
