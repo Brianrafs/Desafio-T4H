@@ -1,10 +1,7 @@
 from crewai import Agent, BaseLLM
-from crewai.tools import BaseTool
-from pydantic import BaseModel
 
-from banco_agil.models.errors import AuthorizationError, ToolError
 from banco_agil.models.state import AgentType
-from banco_agil.tools.session_tools import TOOL_SCOPES
+from banco_agil.tools.session_tools import SessionTools
 
 PERSONA = (
     "Você faz parte do atendimento digital do Banco Ágil. Seja cordial, claro e objetivo. "
@@ -40,36 +37,13 @@ RESPONSIBILITIES = {
 }
 
 
-class NoArguments(BaseModel):
-    pass
-
-
-class DeferredOperation(BaseTool):
-    """Barreira da fase de interpretação: nenhuma operação antes de validar o turno.
-
-    As implementações executáveis estão em SessionTools e são invocadas pelo Flow.
-    Mesmo uma tentativa de tool call durante a extração não altera domínio ou estado.
-    """
-
-    args_schema: type[BaseModel] = NoArguments
-
-    def _run(self) -> str:
-        return ToolError.from_exception(AuthorizationError()).model_dump_json()
-
-
-def create_agent(kind: AgentType, llm: BaseLLM) -> Agent:
+def create_agent(kind: AgentType, llm: BaseLLM, operations: SessionTools) -> Agent:
     return Agent(
         role=f"Atendimento — {kind.value}",
         goal=RESPONSIBILITIES[kind],
         backstory=PERSONA,
         llm=llm,
-        tools=[
-            DeferredOperation(
-                name=name,
-                description="Operação executada pelo Flow após validação do contrato JSON.",
-            )
-            for name in TOOL_SCOPES[kind]
-        ],
+        tools=operations.for_agent(kind),
         allow_delegation=False,
         verbose=False,
         cache=False,

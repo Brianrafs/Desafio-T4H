@@ -13,5 +13,7 @@ def create_conversation(settings: Settings) -> Conversation:
     flow = BankingFlow(
         settings.data_dir, ExchangeService(settings.awesome_api_key.get_secret_value())
     )
-    provider = GroqProvider(settings.groq_api_key.get_secret_value(), settings.groq_model)
+    provider = GroqProvider(
+        settings.groq_api_key.get_secret_value(), settings.groq_model, flow.tools
+    )
     return Conversation(flow, provider)

@@ -53,6 +53,10 @@ class BankingFlow(Flow[SessionState]):
         )
         record(Event.SESSION_STARTED, self.state.session_id)
 
+    @property
+    def tools(self) -> SessionTools:
+        return self._tools
+
     async def process(self, result: TurnResult) -> str:
         if self.state.status == ConversationStatus.FINISHED:
             return "Este atendimento foi encerrado. Inicie uma nova conversa para continuar."
@@ -87,7 +91,7 @@ class BankingFlow(Flow[SessionState]):
             or getattr(result, "transition_request", None) == TransitionIntent.END_CONVERSATION
             or getattr(result, "detected_intent", None) == IntentType.END_CONVERSATION
         ):
-            transition(self.state, self._tools.end_conversation())
+            transition(self.state, await self._tools.execute("end_conversation"))
             return "Atendimento encerrado. Obrigado por conversar com o Banco Ágil!"
         if self.state.current_agent == AgentType.TRIAGE:
             return await self._triage(result)
@@ -110,8 +114,10 @@ class BankingFlow(Flow[SessionState]):
                 return "Para começar, informe seu CPF."
             if state.authentication.birth_date is None:
                 return "Qual é sua data de nascimento? Informe dia, mês e ano."
-            customer = self._tools.authenticate_customer(
-                state.authentication.cpf, state.authentication.birth_date
+            customer = await self._tools.execute(
+                "authenticate_customer",
+                cpf=state.authentication.cpf,
+                birth_date=state.authentication.birth_date,
             )
             state.authentication = AuthenticationContext()
             if customer is None:
@@ -187,7 +193,8 @@ class BankingFlow(Flow[SessionState]):
             credit.awaiting_interview_confirmation = False
             return "Tudo bem. Posso ajudar com uma consulta de limite ou de cotação."
         if result.detected_intent == IntentType.CREDIT_LIMIT_QUERY:
-            return f"Seu limite atual é {self._money(self._tools.get_credit_limit())}."
+            limit = await self._tools.execute("get_credit_limit")
+            return f"Seu limite atual é {self._money(limit)}."
         if result.detected_intent == IntentType.CREDIT_LIMIT_INCREASE:
             credit.awaiting_requested_limit = True
             credit.requested_limit = result.requested_limit
@@ -197,7 +204,7 @@ class BankingFlow(Flow[SessionState]):
         if credit.awaiting_requested_limit:
             if result.requested_limit is None and credit.requested_limit is None:
                 return "Qual novo limite total você deseja solicitar?"
-            return self._evaluate_credit()
+            return await self._evaluate_credit()
         return "Você quer consultar seu limite ou solicitar um aumento?"
 
     def _interview_question(self) -> str:
@@ -222,18 +229,20 @@ class BankingFlow(Flow[SessionState]):
             setattr(interview, field, value)
         if not interview.is_complete():
             return self._interview_question()
-        self._tools.submit_credit_interview()
+        await self._tools.execute("submit_credit_interview")
         interview.score_persisted = True
         interview.completed = True
         record(Event.CREDIT_SCORE_UPDATED, self.state.session_id)
         transition(self.state, TransitionIntent.RETURN_TO_CREDIT)
         self.state.credit.awaiting_requested_limit = True
         self._checkpoint()
-        return "Entrevista concluída. " + self._evaluate_credit()
+        return "Entrevista concluída. " + await self._evaluate_credit()
 
-    def _evaluate_credit(self) -> str:
+    async def _evaluate_credit(self) -> str:
         credit = self.state.credit
-        result = self._tools.request_credit_limit_increase(credit.requested_limit)
+        result = await self._tools.execute(
+            "request_credit_limit_increase", requested_limit=credit.requested_limit
+        )
         credit.last_request_status = result.status_pedido
         record(Event.CREDIT_REQUEST_EVALUATED, self.state.session_id, status=result.status_pedido)
         credit.awaiting_requested_limit = False
@@ -264,7 +273,7 @@ class BankingFlow(Flow[SessionState]):
             transition(self.state, result.transition_request)
         if result.currency is None:
             return "Qual moeda deseja consultar: dólar (USD), euro (EUR) ou libra (GBP)?"
-        quote = await self._tools.get_exchange_rate(result.currency)
+        quote = await self._tools.execute("get_exchange_rate", currency=result.currency)
         timestamp = (
             f" Cotação de {quote.quoted_at:%d/%m/%Y às %H:%M} UTC." if quote.quoted_at else ""
         )

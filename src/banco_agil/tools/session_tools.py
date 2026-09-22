@@ -31,6 +31,18 @@ class SessionTools:
         self._state = state
         self.authentication, self.credit = authentication, credit
         self.score, self.exchange = score, exchange
+        self._crewai_tools = None
+
+    def for_agent(self, kind: AgentType):
+        from banco_agil.tools.crewai_tools import create_tools
+
+        if self._crewai_tools is None:
+            self._crewai_tools = create_tools(self)
+        return [self._crewai_tools[name] for name in TOOL_SCOPES[kind]]
+
+    async def execute(self, name: str, **kwargs):
+        self.for_agent(self._state().current_agent)
+        return await self._crewai_tools[name].invoke_from_flow(**kwargs)
 
     def _authorize(self, name: str, protected: bool = True) -> SessionState:
         state = self._state()

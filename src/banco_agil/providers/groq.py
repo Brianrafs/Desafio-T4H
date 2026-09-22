@@ -10,6 +10,7 @@ from banco_agil.models.agent_outputs import OUTPUT_TYPES, TurnResult
 from banco_agil.models.errors import LLMError, LLMStructuredOutputError
 from banco_agil.models.state import SessionState
 from banco_agil.observability import configure_logging
+from banco_agil.tools.session_tools import SessionTools
 
 
 class LLMProvider(Protocol):
@@ -84,8 +85,9 @@ class GroqLLM(BaseLLM):
 
 
 class GroqProvider:
-    def __init__(self, api_key: str, model: str, transport=None):
+    def __init__(self, api_key: str, model: str, tools: SessionTools, transport=None):
         self._api_key, self.model, self.transport = api_key, model, transport
+        self.tools = tools
 
     async def interpret(self, message: str, state: SessionState) -> TurnResult:
         from banco_agil.agents.factory import create_agent
@@ -112,7 +114,7 @@ class GroqProvider:
             f"Mensagem do cliente: {json.dumps(message, ensure_ascii=False)}"
         )
         for attempt in range(2):
-            agent = create_agent(state.current_agent, llm)
+            agent = create_agent(state.current_agent, llm, self.tools)
             try:
                 result = await agent.kickoff_async(prompt)
                 return output.model_validate_json(result.raw)

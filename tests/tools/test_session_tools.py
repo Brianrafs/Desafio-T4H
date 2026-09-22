@@ -71,3 +71,20 @@ def test_credit_requires_validated_amount(session_tools):
     state.credit.awaiting_requested_limit = True
     state.credit.requested_limit = Decimal(2000)
     assert tools.request_credit_limit_increase(Decimal(2000)).status_pedido == "aprovado"
+
+
+async def test_crewai_tool_only_executes_after_flow_authorization(session_tools):
+    state, tools = session_tools
+    state.authenticated = True
+    state.authenticated_customer_cpf = "00000000001"
+    state.current_agent = AgentType.CREDIT
+    state.credit.awaiting_requested_limit = True
+    state.credit.requested_limit = Decimal(2000)
+    tool = next(
+        t for t in tools.for_agent(AgentType.CREDIT) if t.name == "request_credit_limit_increase"
+    )
+    assert "unauthorized" in tool._run(requested_limit=2000)
+    assert tools.credit.requests.read() == []
+    result = await tools.execute("request_credit_limit_increase", requested_limit=2000)
+    assert result.status_pedido == "aprovado"
+    assert "unauthorized" in tool._run(requested_limit=2000)

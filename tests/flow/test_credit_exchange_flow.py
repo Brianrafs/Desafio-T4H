@@ -21,6 +21,14 @@ async def test_query_and_increase(data_dir):
     assert flow._tools.credit.get_limit("00000000001") == 2000
 
 
+async def test_zero_limit_is_controlled(data_dir):
+    flow = BankingFlow(data_dir)
+    await authenticate(flow)
+    await flow.process(CreditTurnResult(requested_limit=0))
+    assert flow.state.last_error_code == "invalid_limit"
+    assert flow.tools.credit.requests.read() == []
+
+
 async def test_topic_switch_and_forbidden_interview(data_dir):
     transport = httpx.MockTransport(
         lambda request: httpx.Response(200, json={"USDBRL": {"bid": "5"}})
