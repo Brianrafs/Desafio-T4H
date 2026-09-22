@@ -38,6 +38,14 @@ A especificação de referência é `2026-09-22-banco-agil-design.md`. Cada etap
 - Falhas de interpretação não devem executar operações financeiras nem perder autenticação ou progresso da entrevista.
 - A validação automatizada deve funcionar sem internet; a demonstração real exige configuração da Groq e disponibilidade da AwesomeAPI.
 
-## Estado inicial
+## Estado da implementação
 
-Planejamento registrado. A pasta de trabalho ainda não contém implementação nem repositório Git inicializado.
+As etapas 1–16 foram implementadas e registradas em commits separados por funcionalidade. A documentação da etapa 17 está em `README.md`.
+
+- 113 testes automatizados passaram, incluindo os fluxos pela interface com AppTest.
+- Ruff passou para `src`, `tests` e `app.py`.
+- A integração dos agentes foi exercitada com CrewAI real e respostas HTTP simuladas.
+- A instalação em um segundo ambiente virtual limpo passou com `uv sync --locked --offline`, usando o cache local; os 113 testes e o Ruff também passaram nesse ambiente.
+- Uma consulta manual real de USD à AwesomeAPI retornou cotação e horário.
+- A demonstração com a Groq real permanece pendente de credencial; não é substituída pelos testes simulados.
+- O histórico inclui correções para preservar etapas concluídas após falhas e a conexão das tools CrewAI executáveis ao Flow.
