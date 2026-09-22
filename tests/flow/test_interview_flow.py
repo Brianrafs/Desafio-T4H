@@ -2,6 +2,7 @@ import pytest
 
 from banco_agil.flow.banking_flow import BankingFlow
 from banco_agil.models.agent_outputs import CreditTurnResult, InterviewTurnResult, TriageTurnResult
+from banco_agil.models.errors import RepositoryError
 from banco_agil.repositories.credit_request_repository import CreditRequestRepository
 from banco_agil.repositories.customer_repository import CustomerRepository
 
@@ -84,3 +85,30 @@ async def test_end_during_interview(data_dir):
     await flow.process(InterviewTurnResult(end_requested=True))
     assert flow.state.status == "finished"
     assert CustomerRepository(data_dir).require("00000000001").score_credito == 400
+
+
+async def test_retry_after_interview_does_not_duplicate_request(data_dir, monkeypatch):
+    flow = await rejected_flow(data_dir)
+    await flow.process(CreditTurnResult(interview_accepted=True))
+    for values in [
+        dict(monthly_income=10000),
+        dict(employment_type="formal"),
+        dict(fixed_expenses=1000),
+        dict(dependents=0),
+    ]:
+        await flow.process(InterviewTurnResult(**values))
+    save = flow._tools.credit.requests.save
+
+    def fail(request):
+        raise RepositoryError()
+
+    monkeypatch.setattr(flow._tools.credit.requests, "save", fail)
+    await flow.process(InterviewTurnResult(has_active_debt=False))
+    assert flow.state.current_agent == "credit"
+    assert flow.state.interview.completed
+    monkeypatch.setattr(flow._tools.credit.requests, "save", save)
+    await flow.process(CreditTurnResult())
+    assert [row.status_pedido for row in flow._tools.credit.requests.read()] == [
+        "rejeitado",
+        "aprovado",
+    ]

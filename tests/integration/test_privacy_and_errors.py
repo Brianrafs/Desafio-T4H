@@ -1,9 +1,12 @@
 import json
 
+import httpx
+
 from banco_agil.conversation import Conversation
 from banco_agil.flow.banking_flow import BankingFlow
 from banco_agil.models.agent_outputs import TriageTurnResult
 from banco_agil.models.errors import LLMError, RepositoryError
+from banco_agil.services.exchange_service import ExchangeService
 
 
 async def test_logs_do_not_contain_personal_data(data_dir, caplog):
@@ -57,3 +60,19 @@ async def test_llm_error_preserves_state_and_allows_exit(data_dir):
     assert flow.state.current_agent == "credit"
     await conversation.send("encerrar")
     assert flow.state.status == "finished"
+
+
+async def test_authentication_is_preserved_when_following_exchange_fails(data_dir):
+    exchange = ExchangeService(transport=httpx.MockTransport(lambda request: httpx.Response(500)))
+    flow = BankingFlow(data_dir, exchange)
+    await flow.process(
+        TriageTurnResult(
+            cpf="00000000001",
+            birth_date="1990-01-15",
+            detected_intent="exchange_rate",
+            currency="USD",
+        )
+    )
+    assert flow.state.authenticated
+    assert flow.state.current_agent == "triage"
+    assert flow.state.pending_intent == "exchange_rate"

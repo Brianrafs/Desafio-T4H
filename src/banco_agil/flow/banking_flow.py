@@ -35,6 +35,7 @@ from banco_agil.tools.session_tools import SessionTools
 class BankingFlow(Flow[SessionState]):
     _tools: SessionTools = PrivateAttr()
     _turn_result: TurnResult | None = PrivateAttr(default=None)
+    _rollback_state: SessionState | None = PrivateAttr(default=None)
 
     def __init__(self, data_dir: Path, exchange: ExchangeService | None = None, **kwargs):
         configure_logging()
@@ -57,7 +58,7 @@ class BankingFlow(Flow[SessionState]):
             return "Este atendimento foi encerrado. Inicie uma nova conversa para continuar."
         if not isinstance(result, OUTPUT_TYPES[self.state.current_agent]):
             return LLMStructuredOutputError.user_message
-        snapshot = self.state.model_copy(deep=True)
+        self._checkpoint()
         self._turn_result = result
         try:
             response = await self.kickoff_async()
@@ -65,12 +66,16 @@ class BankingFlow(Flow[SessionState]):
             return response
         except BankingError as exc:
             for name in SessionState.model_fields:
-                setattr(self.state, name, getattr(snapshot, name))
+                setattr(self.state, name, getattr(self._rollback_state, name))
             self.state.last_error_code = exc.code
             record(Event.OPERATION_FAILED, self.state.session_id, error_code=exc.code)
             return exc.user_message
         finally:
             self._turn_result = None
+            self._rollback_state = None
+
+    def _checkpoint(self) -> None:
+        self._rollback_state = self.state.model_copy(deep=True)
 
     @start()
     async def dispatch(self) -> str:
@@ -123,6 +128,7 @@ class BankingFlow(Flow[SessionState]):
             state.authenticated = True
             state.authentication_attempts = 0
             record(Event.AUTHENTICATION_SUCCEEDED, state.session_id)
+            self._checkpoint()
         return await self._resume_intent()
 
     async def _resume_intent(self) -> str:
@@ -222,6 +228,7 @@ class BankingFlow(Flow[SessionState]):
         record(Event.CREDIT_SCORE_UPDATED, self.state.session_id)
         transition(self.state, TransitionIntent.RETURN_TO_CREDIT)
         self.state.credit.awaiting_requested_limit = True
+        self._checkpoint()
         return "Entrevista concluída. " + self._evaluate_credit()
 
     def _evaluate_credit(self) -> str:
