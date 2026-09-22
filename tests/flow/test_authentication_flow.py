@@ -12,7 +12,8 @@ async def test_progressive_authentication(data_dir):
     await flow.process(TriageTurnResult(birth_date="1990-01-15"))
     assert flow.state.authenticated
     assert flow.state.authenticated_customer_cpf == "00000000001"
-    assert flow.state.pending_intent == "credit_limit_increase"
+    assert flow.state.current_agent == "credit"
+    assert flow.state.credit.awaiting_requested_limit
     assert flow.state.authentication.cpf is None
 
 

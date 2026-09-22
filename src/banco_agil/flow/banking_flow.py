@@ -4,7 +4,14 @@ from crewai.flow.flow import Flow, start
 from pydantic import PrivateAttr
 
 from banco_agil.flow.transitions import transition
-from banco_agil.models.agent_outputs import OUTPUT_TYPES, TriageTurnResult, TurnResult
+from banco_agil.models.agent_outputs import (
+    OUTPUT_TYPES,
+    CreditTurnResult,
+    ExchangeTurnResult,
+    TriageTurnResult,
+    TurnResult,
+)
+from banco_agil.models.domain import CreditRequestStatus
 from banco_agil.models.errors import BankingError, LLMStructuredOutputError
 from banco_agil.models.state import (
     AgentType,
@@ -110,10 +117,97 @@ class BankingFlow(Flow[SessionState]):
         return await self._resume_intent()
 
     async def _resume_intent(self) -> str:
+        intent = self.state.pending_intent
+        if intent in (IntentType.CREDIT_LIMIT_QUERY, IntentType.CREDIT_LIMIT_INCREASE):
+            transition(self.state, TransitionIntent.GO_TO_CREDIT)
+            self.state.pending_intent = None
+            return await self._credit(
+                CreditTurnResult(
+                    detected_intent=intent, requested_limit=self.state.credit.requested_limit
+                )
+            )
+        if intent == IntentType.EXCHANGE_RATE:
+            transition(self.state, TransitionIntent.GO_TO_EXCHANGE)
+            self.state.pending_intent = None
+            currency = self.state.pending_currency
+            self.state.pending_currency = None
+            return await self._exchange(ExchangeTurnResult(currency=currency))
         return (
             "Identidade confirmada. Você quer consultar seu limite, "
             "pedir um aumento ou uma cotação?"
         )
 
     async def _specialist(self, result: TurnResult) -> str:
+        if self.state.current_agent == AgentType.CREDIT:
+            return await self._credit(result)
+        if self.state.current_agent == AgentType.EXCHANGE:
+            return await self._exchange(result)
         raise LLMStructuredOutputError()
+
+    @staticmethod
+    def _money(value) -> str:
+        return "R$ " + f"{value:,.2f}".replace(",", "_").replace(".", ",").replace("_", ".")
+
+    async def _credit(self, result: CreditTurnResult) -> str:
+        if (
+            result.transition_request == TransitionIntent.GO_TO_EXCHANGE
+            or result.detected_intent == IntentType.EXCHANGE_RATE
+        ):
+            transition(self.state, TransitionIntent.GO_TO_EXCHANGE)
+            return await self._exchange(ExchangeTurnResult(currency=result.currency))
+        if result.transition_request not in (None, TransitionIntent.START_CREDIT_INTERVIEW):
+            transition(self.state, result.transition_request)
+        credit = self.state.credit
+        if result.detected_intent == IntentType.CREDIT_LIMIT_QUERY:
+            return f"Seu limite atual é {self._money(self._tools.get_credit_limit())}."
+        if result.detected_intent == IntentType.CREDIT_LIMIT_INCREASE:
+            credit.awaiting_requested_limit = True
+        if result.requested_limit is not None:
+            credit.requested_limit = result.requested_limit
+            credit.awaiting_requested_limit = True
+        if credit.awaiting_requested_limit:
+            if result.requested_limit is None and credit.requested_limit is None:
+                return "Qual novo limite total você deseja solicitar?"
+            return self._evaluate_credit()
+        return "Você quer consultar seu limite ou solicitar um aumento?"
+
+    def _evaluate_credit(self) -> str:
+        credit = self.state.credit
+        result = self._tools.request_credit_limit_increase(credit.requested_limit)
+        credit.last_request_status = result.status_pedido
+        credit.awaiting_requested_limit = False
+        credit.awaiting_interview_confirmation = (
+            result.status_pedido == CreditRequestStatus.REJECTED
+        )
+        if result.status_pedido == CreditRequestStatus.APPROVED:
+            return (
+                f"Pedido aprovado! Seu novo limite é {self._money(result.novo_limite_solicitado)}."
+            )
+        return (
+            "Seu pedido não foi aprovado nesta análise. "
+            "Quer responder a uma breve entrevista financeira para reavaliarmos o pedido?"
+        )
+
+    async def _exchange(self, result: ExchangeTurnResult) -> str:
+        if result.transition_request == TransitionIntent.GO_TO_CREDIT or result.detected_intent in (
+            IntentType.CREDIT_LIMIT_QUERY,
+            IntentType.CREDIT_LIMIT_INCREASE,
+        ):
+            transition(self.state, TransitionIntent.GO_TO_CREDIT)
+            return await self._credit(
+                CreditTurnResult(
+                    detected_intent=result.detected_intent, requested_limit=result.requested_limit
+                )
+            )
+        if result.transition_request is not None:
+            transition(self.state, result.transition_request)
+        if result.currency is None:
+            return "Qual moeda deseja consultar: dólar (USD), euro (EUR) ou libra (GBP)?"
+        quote = await self._tools.get_exchange_rate(result.currency)
+        timestamp = (
+            f" Cotação de {quote.quoted_at:%d/%m/%Y às %H:%M} UTC." if quote.quoted_at else ""
+        )
+        return (
+            f"1 {quote.currency} = R$ {quote.bid:.4f} (compra).{timestamp} "
+            "Posso ajudar com mais alguma coisa?"
+        )
