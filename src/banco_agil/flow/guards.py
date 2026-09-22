@@ -8,7 +8,9 @@ from banco_agil.models.state import (
 )
 
 
-def validate_transition(state: SessionState, intent: TransitionIntent, *, accepted=False) -> None:
+def validate_transition(
+    state: SessionState, intent: TransitionIntent, *, accepted=False, operation_completed=False
+) -> None:
     if state.status != ConversationStatus.ACTIVE:
         raise AuthorizationError()
     if intent == TransitionIntent.END_CONVERSATION:
@@ -17,7 +19,14 @@ def validate_transition(state: SessionState, intent: TransitionIntent, *, accept
         raise AuthorizationError()
     source = state.current_agent
     allowed = False
-    if intent == TransitionIntent.GO_TO_CREDIT:
+    if intent == TransitionIntent.RETURN_TO_TRIAGE:
+        allowed = (
+            operation_completed
+            and source in (AgentType.CREDIT, AgentType.EXCHANGE)
+            and not state.credit.awaiting_requested_limit
+            and not state.credit.awaiting_interview_confirmation
+        )
+    elif intent == TransitionIntent.GO_TO_CREDIT:
         allowed = source in (AgentType.TRIAGE, AgentType.EXCHANGE)
     elif intent == TransitionIntent.GO_TO_EXCHANGE:
         allowed = source in (AgentType.TRIAGE, AgentType.CREDIT)

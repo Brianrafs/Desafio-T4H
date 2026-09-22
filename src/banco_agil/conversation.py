@@ -9,6 +9,7 @@ from banco_agil.providers.groq import LLMProvider
 class Conversation:
     def __init__(self, flow: BankingFlow, provider: LLMProvider):
         self.flow, self.provider = flow, provider
+        self.last_reply: str | None = None
 
     async def send(self, message: str) -> str:
         if self.flow.state.status == ConversationStatus.FINISHED:
@@ -26,10 +27,14 @@ class Conversation:
         else:
             try:
                 result = await self.provider.interpret(
-                    message, self.flow.state.model_copy(deep=True)
+                    message, self.flow.state.model_copy(deep=True), last_reply=self.last_reply
                 )
             except LLMError as exc:
                 self.flow.state.last_error_code = exc.code
                 record(Event.EXTERNAL_API_FAILED, self.flow.state.session_id, error_code=exc.code)
                 return exc.user_message
-        return await self.flow.process(result)
+        response = await self.flow.process(result)
+        # Um erro não substitui a pergunta que o cliente estava respondendo.
+        if self.flow.state.last_error_code is None:
+            self.last_reply = response
+        return response

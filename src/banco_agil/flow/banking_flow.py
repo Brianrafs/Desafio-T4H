@@ -103,8 +103,12 @@ class BankingFlow(Flow[SessionState]):
             state.pending_intent = result.detected_intent
         if result.requested_limit is not None:
             state.credit.requested_limit = result.requested_limit
+            if result.detected_intent in (None, IntentType.UNKNOWN):
+                state.pending_intent = IntentType.CREDIT_LIMIT_INCREASE
         if result.currency is not None:
             state.pending_currency = result.currency
+            if result.detected_intent in (None, IntentType.UNKNOWN):
+                state.pending_intent = IntentType.EXCHANGE_RATE
         if not state.authenticated:
             if result.cpf is not None:
                 state.authentication.cpf = result.cpf
@@ -178,7 +182,11 @@ class BankingFlow(Flow[SessionState]):
         ):
             transition(self.state, TransitionIntent.GO_TO_EXCHANGE)
             return await self._exchange(ExchangeTurnResult(currency=result.currency))
-        if result.transition_request not in (None, TransitionIntent.START_CREDIT_INTERVIEW):
+        if result.transition_request not in (
+            None,
+            TransitionIntent.START_CREDIT_INTERVIEW,
+            TransitionIntent.GO_TO_CREDIT,
+        ):
             transition(self.state, result.transition_request)
         credit = self.state.credit
         if result.interview_accepted is True:
@@ -191,10 +199,12 @@ class BankingFlow(Flow[SessionState]):
             transition(self.state, result.transition_request, accepted=False)
         if result.interview_accepted is False and credit.awaiting_interview_confirmation:
             credit.awaiting_interview_confirmation = False
-            return "Tudo bem. Posso ajudar com uma consulta de limite ou de cotação."
+            return self._complete_operation(
+                "Tudo bem, podemos deixar a entrevista para outra hora."
+            )
         if result.detected_intent == IntentType.CREDIT_LIMIT_QUERY:
             limit = await self._tools.execute("get_credit_limit")
-            return f"Seu limite atual é {self._money(limit)}."
+            return self._complete_operation(f"Seu limite atual é {self._money(limit)}.")
         if result.detected_intent == IntentType.CREDIT_LIMIT_INCREASE:
             credit.awaiting_requested_limit = True
             credit.requested_limit = result.requested_limit
@@ -216,6 +226,21 @@ class BankingFlow(Flow[SessionState]):
             "has_active_debt": "Você tem alguma dívida ativa? Responda sim ou não.",
         }
         return questions[self.state.interview.next_missing_field()]
+
+    def _complete_operation(self, response: str) -> str:
+        self.state.pending_intent = None
+        self.state.pending_currency = None
+        self.state.credit.requested_limit = None
+        self.state.credit.awaiting_requested_limit = False
+        self.state.credit.awaiting_interview_confirmation = False
+        transition(self.state, TransitionIntent.RETURN_TO_TRIAGE, operation_completed=True)
+        return response + (
+            "\n\nO que você gostaria de fazer agora?\n\n"
+            "- **Consultar meu limite**\n"
+            "- **Solicitar um aumento**\n"
+            "- **Consultar uma cotação** — USD, EUR ou GBP\n"
+            "- **Encerrar o atendimento**"
+        )
 
     async def _interview(self, result: InterviewTurnResult) -> str:
         interview = self.state.interview
@@ -250,7 +275,7 @@ class BankingFlow(Flow[SessionState]):
             result.status_pedido == CreditRequestStatus.REJECTED
         )
         if result.status_pedido == CreditRequestStatus.APPROVED:
-            return (
+            return self._complete_operation(
                 f"Pedido aprovado! Seu novo limite é {self._money(result.novo_limite_solicitado)}."
             )
         return (
@@ -269,7 +294,7 @@ class BankingFlow(Flow[SessionState]):
                     detected_intent=result.detected_intent, requested_limit=result.requested_limit
                 )
             )
-        if result.transition_request is not None:
+        if result.transition_request not in (None, TransitionIntent.GO_TO_EXCHANGE):
             transition(self.state, result.transition_request)
         if result.currency is None:
             return "Qual moeda deseja consultar: dólar (USD), euro (EUR) ou libra (GBP)?"
@@ -277,7 +302,6 @@ class BankingFlow(Flow[SessionState]):
         timestamp = (
             f" Cotação de {quote.quoted_at:%d/%m/%Y às %H:%M} UTC." if quote.quoted_at else ""
         )
-        return (
+        return self._complete_operation(
             f"1 {quote.currency} = R$ {quote.bid:.4f} (compra).{timestamp} "
-            "Posso ajudar com mais alguma coisa?"
         )

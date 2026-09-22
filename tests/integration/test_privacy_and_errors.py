@@ -44,7 +44,7 @@ async def test_repository_error_keeps_authentication_context(data_dir, monkeypat
 
 async def test_llm_error_preserves_state_and_allows_exit(data_dir):
     class BrokenProvider:
-        async def interpret(self, message, state):
+        async def interpret(self, message, state, *, last_reply=None):
             state.authenticated = False
             raise LLMError()
 
@@ -57,7 +57,7 @@ async def test_llm_error_preserves_state_and_allows_exit(data_dir):
     conversation = Conversation(flow, BrokenProvider())
     await conversation.send("Olá")
     assert flow.state.authenticated
-    assert flow.state.current_agent == "credit"
+    assert flow.state.current_agent == "triage"
     await conversation.send("encerrar")
     assert flow.state.status == "finished"
 

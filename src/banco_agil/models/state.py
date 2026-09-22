@@ -34,6 +34,7 @@ class IntentType(StrEnum):
 
 
 class TransitionIntent(StrEnum):
+    RETURN_TO_TRIAGE = "return_to_triage"
     GO_TO_CREDIT = "go_to_credit"
     GO_TO_EXCHANGE = "go_to_exchange"
     START_CREDIT_INTERVIEW = "start_credit_interview"

@@ -32,7 +32,7 @@ async def test_golden_path(data_dir):
         dict(has_active_debt=False),
     ]:
         await flow.process(InterviewTurnResult(**values))
-    assert flow.state.current_agent == "credit"
+    assert flow.state.current_agent == "triage"
     assert flow.state.interview.completed
     assert flow.state.interview.score_persisted
     customer = CustomerRepository(data_dir).require("00000000001")
@@ -63,7 +63,7 @@ async def test_only_expected_field_is_accepted(data_dir):
 async def test_no_interview_without_acceptance(data_dir, accept):
     flow = await rejected_flow(data_dir)
     await flow.process(CreditTurnResult(interview_accepted=accept))
-    assert flow.state.current_agent == "credit"
+    assert flow.state.current_agent == ("triage" if accept is False else "credit")
     assert flow.state.interview is None
 
 
@@ -71,7 +71,7 @@ async def test_no_interview_without_rejection(data_dir):
     flow = BankingFlow(data_dir)
     await flow.process(
         TriageTurnResult(
-            cpf="00000000001", birth_date="1990-01-15", detected_intent="credit_limit_query"
+            cpf="00000000001", birth_date="1990-01-15", detected_intent="credit_limit_increase"
         )
     )
     await flow.process(CreditTurnResult(interview_accepted=True))

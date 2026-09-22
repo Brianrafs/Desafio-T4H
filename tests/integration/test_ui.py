@@ -17,7 +17,7 @@ class ScriptedProvider:
     def __init__(self, outputs):
         self.outputs = iter(outputs)
 
-    async def interpret(self, message, state):
+    async def interpret(self, message, state, *, last_reply=None):
         return next(self.outputs)
 
 
@@ -41,7 +41,7 @@ def test_golden_path_through_chat(data_dir, monkeypatch):
             TriageTurnResult(
                 cpf="00000000001", birth_date="1990-01-15", detected_intent="credit_limit_query"
             ),
-            CreditTurnResult(requested_limit=4000),
+            TriageTurnResult(detected_intent="credit_limit_increase", requested_limit=4000),
             CreditTurnResult(interview_accepted=True),
             InterviewTurnResult(monthly_income=10000),
             InterviewTurnResult(employment_type="formal"),
