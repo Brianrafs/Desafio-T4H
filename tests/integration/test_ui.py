@@ -1,10 +1,14 @@
+import json
 from pathlib import Path
 
+import httpx
 from streamlit.testing.v1 import AppTest
 
 from banco_agil.conversation import Conversation
 from banco_agil.flow.banking_flow import BankingFlow
 from banco_agil.models.agent_outputs import CreditTurnResult, InterviewTurnResult, TriageTurnResult
+from banco_agil.providers.groq import GroqProvider
+from banco_agil.services.exchange_service import ExchangeService
 
 APP = Path(__file__).parents[2] / "app.py"
 
@@ -69,3 +73,58 @@ def test_golden_path_through_chat(data_dir, monkeypatch):
     app.button(key="new_conversation").click().run()
     assert not app.exception
     assert not app.session_state.conversation.flow.state.authenticated
+
+
+def test_three_authentication_failures_through_chat(data_dir, monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "test")
+    bad = TriageTurnResult(cpf="00000000001", birth_date="2000-01-01")
+    app = AppTest.from_file(str(APP), default_timeout=20)
+    app.session_state["conversation"] = Conversation(
+        BankingFlow(data_dir), ScriptedProvider([bad, bad, bad])
+    )
+    app.run()
+    for _ in range(3):
+        app.chat_input[0].set_value("00000000001, 01/01/2000").run()
+        assert not app.exception
+    assert app.chat_input[0].disabled
+    assert app.session_state.conversation.flow.state.authentication_attempts == 3
+
+
+def test_actual_agents_and_exchange_through_ui(data_dir, monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "test")
+    outputs = iter(
+        [
+            {
+                "cpf": "00000000001",
+                "birth_date": "1990-01-15",
+                "detected_intent": "exchange_rate",
+                "currency": "EUR",
+            },
+            {"currency": "GBP"},
+        ]
+    )
+
+    def respond_groq(request):
+        return httpx.Response(
+            200, json={"choices": [{"message": {"content": json.dumps(next(outputs))}}]}
+        )
+
+    def respond_exchange(request):
+        if "GBP" in request.url.path:
+            return httpx.Response(500)
+        return httpx.Response(200, json={"EURBRL": {"bid": "6.1234", "timestamp": "1750000000"}})
+
+    flow = BankingFlow(data_dir, ExchangeService(transport=httpx.MockTransport(respond_exchange)))
+    provider = GroqProvider("test", "test", flow.tools, httpx.MockTransport(respond_groq))
+    app = AppTest.from_file(str(APP), default_timeout=20)
+    app.session_state["conversation"] = Conversation(flow, provider)
+    app.run()
+    app.chat_input[0].set_value("Cotação do euro, CPF 00000000001, 15/01/1990").run()
+    assert not app.exception
+    assert "6.1234" in app.session_state.messages[-1]["content"]
+    app.chat_input[0].set_value("E a libra?").run()
+    assert not app.exception
+    assert "indisponível" in app.session_state.messages[-1]["content"]
+    assert flow.state.authenticated
+    app.button(key="end_conversation").click().run()
+    assert flow.state.status == "finished"

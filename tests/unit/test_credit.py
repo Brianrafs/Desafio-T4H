@@ -57,3 +57,20 @@ def test_recovers_interrupted_approval_without_duplicate(data_dir, monkeypatch):
     assert service.request_increase("00000000001", Decimal(2000)).status_pedido == "aprovado"
     assert len(service.requests.read()) == 1
     assert service.get_limit("00000000001") == 2000
+
+
+def test_recovers_failure_before_customer_update(data_dir, monkeypatch):
+    service = CreditService(CustomerRepository(data_dir))
+    save = service.customers.save
+
+    def fail(customer):
+        raise RepositoryError()
+
+    monkeypatch.setattr(service.customers, "save", fail)
+    with pytest.raises(RepositoryError):
+        service.request_increase("00000000001", Decimal(2000))
+    assert service.customers.require("00000000001").limite_credito == 1000
+    assert service.requests.read()[0].status_pedido == "pendente"
+    monkeypatch.setattr(service.customers, "save", save)
+    assert service.request_increase("00000000001", Decimal(2000)).status_pedido == "aprovado"
+    assert len(service.requests.read()) == 1
