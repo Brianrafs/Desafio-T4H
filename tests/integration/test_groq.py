@@ -5,7 +5,7 @@ import pytest
 
 from banco_agil.agents.factory import create_agent
 from banco_agil.flow.banking_flow import BankingFlow
-from banco_agil.models.errors import LLMError, LLMStructuredOutputError
+from banco_agil.models.errors import LLMError, LLMRateLimitError, LLMStructuredOutputError
 from banco_agil.models.state import AgentType, SessionState
 from banco_agil.providers.groq import GroqLLM, GroqProvider
 from banco_agil.tools.session_tools import TOOL_SCOPES
@@ -56,7 +56,7 @@ async def test_rate_limit_no_retry(data_dir):
         calls.append(request)
         return httpx.Response(429)
 
-    with pytest.raises(LLMError):
+    with pytest.raises(LLMRateLimitError):
         await GroqProvider(
             "test", "test", BankingFlow(data_dir).tools, httpx.MockTransport(respond)
         ).interpret("oi", SessionState())

@@ -5,11 +5,12 @@ import streamlit as st
 from banco_agil.bootstrap import create_conversation
 from banco_agil.config import Settings
 from banco_agil.models.errors import BankingError
-from banco_agil.models.state import ConversationStatus
+from banco_agil.models.state import AgentType, ConversationStatus
+from banco_agil.presentation import WELCOME
 
 st.set_page_config(page_title="Banco Ágil | Atendimento", page_icon=":material/account_balance:")
 st.title("Banco Ágil")
-st.caption("Seu atendimento, em uma conversa.")
+st.caption("Converse com a Lia · Seu atendimento, em uma conversa.")
 
 settings = Settings()
 
@@ -25,9 +26,7 @@ st.session_state.setdefault(
     [
         {
             "role": "assistant",
-            "content": (
-                "Olá! Posso ajudar com seu limite de crédito ou uma cotação. Como posso ajudar?"
-            ),
+            "content": WELCOME,
         }
     ],
 )
@@ -36,8 +35,11 @@ finished = conversation.flow.state.status == ConversationStatus.FINISHED
 configured = bool(settings.groq_api_key.get_secret_value())
 
 with st.sidebar:
-    st.subheader("Atendimento digital")
-    st.write("Consulte seu limite, solicite um aumento ou confira cotações em reais.")
+    st.subheader("Lia · Banco Ágil")
+    st.markdown(
+        "Estou aqui para ajudar com:\n\n"
+        "- **Seu limite de crédito**\n- **Pedidos de aumento**\n- **Cotações em reais**"
+    )
     st.caption("Demonstração com clientes fictícios.")
     with st.expander("Dados para experimentar"):
         st.write("**Ana** · CPF: 000.000.000-01 · Nascimento: 15/01/1990")
@@ -55,25 +57,51 @@ if not configured:
     st.info("Para ativar a conversa, configure GROQ_API_KEY no arquivo .env e recarregue a página.")
 
 for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.write(message["content"])
+    is_lia = message["role"] == "assistant"
+    with st.chat_message(
+        "Lia" if is_lia else "user", avatar=":material/support_agent:" if is_lia else None
+    ):
+        if is_lia:
+            st.caption("Lia · Banco Ágil")
+        st.markdown(message["content"])
 
 if finished:
     st.caption("Atendimento encerrado. Use “Nova conversa” para começar novamente.")
 
-prompt = st.chat_input(
-    "Escreva sua mensagem…",
+quick_action = None
+if (
+    not finished
+    and configured
+    and conversation.flow.state.current_agent == AgentType.TRIAGE
+    and (conversation.flow.state.authenticated or len(st.session_state.messages) == 1)
+):
+    with st.container(horizontal=True):
+        for label, text in (
+            ("Consultar limite", "Quero consultar meu limite"),
+            ("Pedir aumento", "Quero pedir um aumento de limite"),
+            ("Ver cotação", "Quero consultar uma cotação"),
+        ):
+            if st.button(label, key=f"quick_{label}"):
+                quick_action = text
+
+typed_prompt = st.chat_input(
+    "Conte para a Lia como ela pode ajudar…",
     key="chat",
     disabled=finished or not configured,
     max_chars=4000,
     submit_mode="disable",
 )
+prompt = quick_action or typed_prompt
 if prompt:
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.write(prompt)
-    with st.chat_message("assistant"), st.spinner("Um instante…"):
+    with (
+        st.chat_message("Lia", avatar=":material/support_agent:"),
+        st.spinner("A Lia está cuidando disso…"),
+    ):
+        st.caption("Lia · Banco Ágil")
         response = asyncio.run(conversation.send(prompt))
-        st.write(response)
+        st.markdown(response)
     st.session_state.messages.append({"role": "assistant", "content": response})
     st.rerun()

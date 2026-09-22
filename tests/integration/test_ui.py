@@ -28,6 +28,8 @@ def test_app_starts_without_key(tmp_path, monkeypatch):
     assert not app.exception
     assert app.chat_input[0].disabled
     assert app.title[0].value == "Banco Ágil"
+    assert "**Lia**" in app.session_state.messages[0]["content"]
+    assert any("Lia" in caption.value for caption in app.caption)
     app.button(key="end_conversation").click().run()
     assert not app.exception
     assert app.session_state.conversation.flow.state.status == "finished"
@@ -73,6 +75,34 @@ def test_golden_path_through_chat(data_dir, monkeypatch):
     app.button(key="new_conversation").click().run()
     assert not app.exception
     assert not app.session_state.conversation.flow.state.authenticated
+
+
+def test_quick_action_and_lia_markdown(data_dir, monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "test")
+    flow = BankingFlow(data_dir)
+    app = AppTest.from_file(str(APP), default_timeout=20)
+    app.session_state["conversation"] = Conversation(
+        flow,
+        ScriptedProvider(
+            [
+                TriageTurnResult(
+                    cpf="00000000001",
+                    birth_date="1990-01-15",
+                    detected_intent="credit_limit_query",
+                    message="Vamos conferir isso juntos.",
+                ),
+            ]
+        ),
+    )
+    app.run()
+    app.button(key="quick_Consultar limite").click().run()
+    assert not app.exception
+    response = app.session_state.messages[-1]["content"]
+    assert response.startswith("Vamos conferir isso juntos.\n\n")
+    assert "**R$ 1.000,00**" in response
+    assert "\n- **" in response
+    assert flow.state.current_agent == "triage"
+    assert not app.button(key="quick_Pedir aumento").disabled
 
 
 def test_three_authentication_failures_through_chat(data_dir, monkeypatch):

@@ -7,7 +7,11 @@ from banco_agil.models.state import IntentType, TransitionIntent
 
 
 class TurnResult(Model):
-    message: str = ""
+    message: str = Field(
+        default="",
+        max_length=220,
+        description="Frase breve de acolhimento da Lia, sem fatos financeiros, dados ou perguntas.",
+    )
     end_requested: bool = False
 
 

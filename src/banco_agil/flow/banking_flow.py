@@ -24,6 +24,7 @@ from banco_agil.models.state import (
     TransitionIntent,
 )
 from banco_agil.observability import Event, configure_logging, record
+from banco_agil.presentation import CLOSED, NEXT_STEPS, OPTIONS, WELCOME
 from banco_agil.repositories.customer_repository import CustomerRepository
 from banco_agil.services.authentication_service import AuthenticationService
 from banco_agil.services.credit_service import CreditService
@@ -59,7 +60,7 @@ class BankingFlow(Flow[SessionState]):
 
     async def process(self, result: TurnResult) -> str:
         if self.state.status == ConversationStatus.FINISHED:
-            return "Este atendimento foi encerrado. Inicie uma nova conversa para continuar."
+            return CLOSED
         if not isinstance(result, OUTPUT_TYPES[self.state.current_agent]):
             return LLMStructuredOutputError.user_message
         self._checkpoint()
@@ -92,7 +93,7 @@ class BankingFlow(Flow[SessionState]):
             or getattr(result, "detected_intent", None) == IntentType.END_CONVERSATION
         ):
             transition(self.state, await self._tools.execute("end_conversation"))
-            return "Atendimento encerrado. Obrigado por conversar com o Banco Ágil!"
+            return CLOSED
         if self.state.current_agent == AgentType.TRIAGE:
             return await self._triage(result)
         return await self._specialist(result)
@@ -115,9 +116,17 @@ class BankingFlow(Flow[SessionState]):
             if result.birth_date is not None:
                 state.authentication.birth_date = result.birth_date
             if state.authentication.cpf is None:
-                return "Para começar, informe seu CPF."
+                if state.pending_intent is None:
+                    return WELCOME
+                return (
+                    "Para cuidar do seu pedido, preciso primeiro confirmar sua identidade.\n\n"
+                    "Pode me informar seu **CPF**?"
+                )
             if state.authentication.birth_date is None:
-                return "Qual é sua data de nascimento? Informe dia, mês e ano."
+                return (
+                    "Agora, me diga sua **data de nascimento**, por favor.\n\n"
+                    "Pode escrever no formato **dia/mês/ano**."
+                )
             customer = await self._tools.execute(
                 "authenticate_customer",
                 cpf=state.authentication.cpf,
@@ -130,10 +139,17 @@ class BankingFlow(Flow[SessionState]):
                 if state.authentication_attempts >= 3:
                     transition(state, TransitionIntent.END_CONVERSATION)
                     return (
-                        "Não foi possível confirmar seus dados após três tentativas. "
-                        "Atendimento encerrado."
+                        "Não consegui confirmar seus dados nas **três tentativas**. "
+                        "Por isso, preciso encerrar este atendimento.\n\n"
+                        "Confira seu CPF e nascimento antes de iniciar uma **Nova conversa**. "
+                        "Estarei por aqui para ajudar.\n\n**Lia · Banco Ágil**"
                     )
-                return "Não consegui confirmar seus dados. Informe novamente seu CPF e nascimento."
+                remaining = 3 - state.authentication_attempts
+                return (
+                    "Os dados não coincidiram com o cadastro. Vamos conferir juntos?\n\n"
+                    "Envie novamente seu **CPF** e sua **data de nascimento**.\n\n"
+                    f"Tentativas restantes: **{remaining}**."
+                )
             state.authenticated_customer_cpf = customer.cpf
             state.authenticated = True
             state.authentication_attempts = 0
@@ -157,10 +173,7 @@ class BankingFlow(Flow[SessionState]):
             currency = self.state.pending_currency
             self.state.pending_currency = None
             return await self._exchange(ExchangeTurnResult(currency=currency))
-        return (
-            "Identidade confirmada. Você quer consultar seu limite, "
-            "pedir um aumento ou uma cotação?"
-        )
+        return "Estou aqui com você. Qual destas opções você prefere?\n\n" + OPTIONS
 
     async def _specialist(self, result: TurnResult) -> str:
         if self.state.current_agent == AgentType.CREDIT:
@@ -193,7 +206,10 @@ class BankingFlow(Flow[SessionState]):
             transition(self.state, TransitionIntent.START_CREDIT_INTERVIEW, accepted=True)
             credit.awaiting_interview_confirmation = False
             self.state.interview = CreditInterviewContext()
-            return self._interview_question()
+            return (
+                "Vamos olhar sua situação com mais cuidado. "
+                "São **cinco perguntas rápidas**, uma de cada vez.\n\n" + self._interview_question()
+            )
         if result.transition_request == TransitionIntent.START_CREDIT_INTERVIEW:
             # Pedir a transição sem aceite explícito não autoriza iniciar a entrevista.
             transition(self.state, result.transition_request, accepted=False)
@@ -204,7 +220,9 @@ class BankingFlow(Flow[SessionState]):
             )
         if result.detected_intent == IntentType.CREDIT_LIMIT_QUERY:
             limit = await self._tools.execute("get_credit_limit")
-            return self._complete_operation(f"Seu limite atual é {self._money(limit)}.")
+            return self._complete_operation(
+                f"Seu limite de crédito atual é **{self._money(limit)}**."
+            )
         if result.detected_intent == IntentType.CREDIT_LIMIT_INCREASE:
             credit.awaiting_requested_limit = True
             credit.requested_limit = result.requested_limit
@@ -213,17 +231,36 @@ class BankingFlow(Flow[SessionState]):
             credit.awaiting_requested_limit = True
         if credit.awaiting_requested_limit:
             if result.requested_limit is None and credit.requested_limit is None:
-                return "Qual novo limite total você deseja solicitar?"
+                return (
+                    "Qual **limite total** você gostaria de ter?\n\n"
+                    "Me diga o valor final desejado, não apenas quanto quer acrescentar."
+                )
             return await self._evaluate_credit()
-        return "Você quer consultar seu limite ou solicitar um aumento?"
+        if credit.awaiting_interview_confirmation:
+            return (
+                "Quer seguir com a **entrevista financeira** para reavaliar seu pedido?\n\n"
+                "Pode responder **sim** ou **não**. "
+                "Se preferir, também podemos consultar uma cotação."
+            )
+        return "Como posso ajudar agora?\n\n" + OPTIONS
 
     def _interview_question(self) -> str:
         questions = {
-            "monthly_income": "Qual é sua renda mensal?",
-            "employment_type": "Você tem emprego formal, é autônomo ou está desempregado?",
-            "fixed_expenses": "Qual é o total das suas despesas fixas mensais?",
-            "dependents": "Quantos dependentes você tem?",
-            "has_active_debt": "Você tem alguma dívida ativa? Responda sim ou não.",
+            "monthly_income": "Para começar, qual é sua **renda mensal**?",
+            "employment_type": (
+                "E como está sua **situação de trabalho** hoje?\n\n"
+                "- Emprego formal, como CLT\n- Trabalho autônomo\n- Sem emprego no momento"
+            ),
+            "fixed_expenses": (
+                "Quanto somam suas **despesas fixas por mês**, como aluguel, contas e alimentação?"
+            ),
+            "dependents": (
+                "Quantas pessoas **dependem financeiramente de você**? Se nenhuma, diga **0**."
+            ),
+            "has_active_debt": (
+                "Falta só uma pergunta: você tem alguma **dívida ativa**?\n\n"
+                "Pode responder **sim** ou **não**."
+            ),
         }
         return questions[self.state.interview.next_missing_field()]
 
@@ -234,13 +271,7 @@ class BankingFlow(Flow[SessionState]):
         self.state.credit.awaiting_requested_limit = False
         self.state.credit.awaiting_interview_confirmation = False
         transition(self.state, TransitionIntent.RETURN_TO_TRIAGE, operation_completed=True)
-        return response + (
-            "\n\nO que você gostaria de fazer agora?\n\n"
-            "- **Consultar meu limite**\n"
-            "- **Solicitar um aumento**\n"
-            "- **Consultar uma cotação** — USD, EUR ou GBP\n"
-            "- **Encerrar o atendimento**"
-        )
+        return response + "\n\n" + NEXT_STEPS
 
     async def _interview(self, result: InterviewTurnResult) -> str:
         interview = self.state.interview
@@ -261,7 +292,10 @@ class BankingFlow(Flow[SessionState]):
         transition(self.state, TransitionIntent.RETURN_TO_CREDIT)
         self.state.credit.awaiting_requested_limit = True
         self._checkpoint()
-        return "Entrevista concluída. " + await self._evaluate_credit()
+        return (
+            "Obrigada por compartilhar essas informações. **Concluímos a entrevista!**\n\n"
+            + await self._evaluate_credit()
+        )
 
     async def _evaluate_credit(self) -> str:
         credit = self.state.credit
@@ -276,11 +310,15 @@ class BankingFlow(Flow[SessionState]):
         )
         if result.status_pedido == CreditRequestStatus.APPROVED:
             return self._complete_operation(
-                f"Pedido aprovado! Seu novo limite é {self._money(result.novo_limite_solicitado)}."
+                "Tenho uma boa notícia: seu pedido foi **aprovado**!\n\n"
+                f"Seu novo limite é **{self._money(result.novo_limite_solicitado)}** "
+                "e já foi atualizado."
             )
         return (
-            "Seu pedido não foi aprovado nesta análise. "
-            "Quer responder a uma breve entrevista financeira para reavaliarmos o pedido?"
+            "Desta vez, o pedido **não foi aprovado**. Seu limite atual continua o mesmo.\n\n"
+            "Se você quiser, podemos fazer uma **breve entrevista financeira** "
+            "e reavaliar o valor solicitado com suas informações atualizadas.\n\n"
+            "**Quer tentar?** Pode responder sim ou não. A entrevista não garante a aprovação."
         )
 
     async def _exchange(self, result: ExchangeTurnResult) -> str:
@@ -297,11 +335,17 @@ class BankingFlow(Flow[SessionState]):
         if result.transition_request not in (None, TransitionIntent.GO_TO_EXCHANGE):
             transition(self.state, result.transition_request)
         if result.currency is None:
-            return "Qual moeda deseja consultar: dólar (USD), euro (EUR) ou libra (GBP)?"
+            return (
+                "Qual moeda você gostaria de consultar?\n\n"
+                "- **Dólar** — USD\n- **Euro** — EUR\n- **Libra** — GBP\n\n"
+                "Vou mostrar a cotação de compra em reais."
+            )
         quote = await self._tools.execute("get_exchange_rate", currency=result.currency)
         timestamp = (
-            f" Cotação de {quote.quoted_at:%d/%m/%Y às %H:%M} UTC." if quote.quoted_at else ""
+            f"\n\nAtualizada em {quote.quoted_at:%d/%m/%Y às %H:%M} UTC." if quote.quoted_at else ""
         )
         return self._complete_operation(
-            f"1 {quote.currency} = R$ {quote.bid:.4f} (compra).{timestamp} "
+            f"**Cotação de {quote.currency}**\n\n"
+            f"**1 {quote.currency} = R$ {quote.bid:.4f}**\n\n"
+            f"Valor de compra em reais.{timestamp}"
         )

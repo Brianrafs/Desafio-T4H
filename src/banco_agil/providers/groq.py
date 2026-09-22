@@ -7,7 +7,7 @@ from crewai import BaseLLM
 from pydantic import PrivateAttr, SecretStr, ValidationError
 
 from banco_agil.models.agent_outputs import OUTPUT_TYPES, TurnResult
-from banco_agil.models.errors import LLMError, LLMStructuredOutputError
+from banco_agil.models.errors import LLMError, LLMRateLimitError, LLMStructuredOutputError
 from banco_agil.models.state import SessionState
 from banco_agil.observability import configure_logging
 from banco_agil.tools.session_tools import SessionTools
@@ -74,6 +74,8 @@ class GroqLLM(BaseLLM):
                         code = None
                     if code == "json_validate_failed":
                         raise LLMStructuredOutputError()
+                if response.status_code == 429:
+                    raise LLMRateLimitError()
                 response.raise_for_status()
                 choice = response.json()["choices"][0]
                 if choice.get("finish_reason") == "length":
@@ -82,7 +84,7 @@ class GroqLLM(BaseLLM):
                 if not isinstance(content, str):
                     raise ValueError("Resposta sem texto")
                 return "Final Answer: " + content
-        except LLMStructuredOutputError as exc:
+        except LLMError as exc:
             self._last_error = exc
             raise
         except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as exc:

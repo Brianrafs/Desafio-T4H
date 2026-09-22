@@ -3,17 +3,18 @@ from banco_agil.models.agent_outputs import OUTPUT_TYPES
 from banco_agil.models.errors import LLMError
 from banco_agil.models.state import ConversationStatus
 from banco_agil.observability import Event, record
+from banco_agil.presentation import CLOSED, WELCOME, with_lia_voice
 from banco_agil.providers.groq import LLMProvider
 
 
 class Conversation:
     def __init__(self, flow: BankingFlow, provider: LLMProvider):
         self.flow, self.provider = flow, provider
-        self.last_reply: str | None = None
+        self.last_reply: str | None = WELCOME
 
     async def send(self, message: str) -> str:
         if self.flow.state.status == ConversationStatus.FINISHED:
-            return "Este atendimento foi encerrado. Inicie uma nova conversa para continuar."
+            return CLOSED
         # Comandos inequívocos continuam disponíveis mesmo com a Groq indisponível.
         if message.strip().casefold().rstrip(".!?") in {
             "sair",
@@ -36,5 +37,7 @@ class Conversation:
         response = await self.flow.process(result)
         # Um erro não substitui a pergunta que o cliente estava respondendo.
         if self.flow.state.last_error_code is None:
+            if self.flow.state.status != ConversationStatus.FINISHED:
+                response = with_lia_voice(response, result.message)
             self.last_reply = response
         return response
