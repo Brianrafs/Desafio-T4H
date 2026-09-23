@@ -7,6 +7,7 @@ from streamlit.testing.v1 import AppTest
 from banco_agil.conversation import Conversation
 from banco_agil.flow.banking_flow import BankingFlow
 from banco_agil.models.agent_outputs import CreditTurnResult, InterviewTurnResult, TriageTurnResult
+from banco_agil.models.state import CreditInterviewContext
 from banco_agil.presentation import WELCOME
 from banco_agil.providers.groq import GroqProvider
 from banco_agil.repositories.customer_repository import CustomerRepository
@@ -221,3 +222,17 @@ def test_authenticated_status_does_not_expose_cpf(data_dir, monkeypatch):
     rendered = " ".join(element.value for element in [*app.caption, *app.success])
     assert "Identidade confirmada" in rendered
     assert "00000000001" not in rendered
+
+
+def test_interview_progress_is_rendered(data_dir, monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "test")
+    flow = BankingFlow(data_dir)
+    flow.state.authenticated = True
+    flow.state.authenticated_customer_cpf = "00000000001"
+    flow.state.current_agent = "credit_interview"
+    flow.state.interview = CreditInterviewContext(monthly_income=10000)
+    app = AppTest.from_file(str(APP), default_timeout=20)
+    app.session_state["conversation"] = Conversation(flow, ScriptedProvider([]))
+    app.run()
+    assert any("etapa 2 de 5" in item.value for item in app.caption)
+    assert app.get("progress")[0].proto.value == 20

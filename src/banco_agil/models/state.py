@@ -1,5 +1,6 @@
 from datetime import date
 from enum import StrEnum
+from typing import ClassVar
 from uuid import uuid4
 
 from pydantic import Field
@@ -55,6 +56,14 @@ class CreditConversationContext(Model):
 
 
 class CreditInterviewContext(Model):
+    FIELDS: ClassVar[tuple[str, ...]] = (
+        "monthly_income",
+        "employment_type",
+        "fixed_expenses",
+        "dependents",
+        "has_active_debt",
+    )
+
     monthly_income: Money | None = None
     employment_type: EmploymentType | None = None
     fixed_expenses: Money | None = None
@@ -64,16 +73,17 @@ class CreditInterviewContext(Model):
     score_persisted: bool = False
 
     def next_missing_field(self) -> str | None:
-        for field in (
-            "monthly_income",
-            "employment_type",
-            "fixed_expenses",
-            "dependents",
-            "has_active_debt",
-        ):
+        for field in self.FIELDS:
             if getattr(self, field) is None:
                 return field
         return None
+
+    def completed_fields(self) -> int:
+        return sum(getattr(self, field) is not None for field in self.FIELDS)
+
+    @classmethod
+    def total_fields(cls) -> int:
+        return len(cls.FIELDS)
 
     def is_complete(self) -> bool:
         return self.next_missing_field() is None

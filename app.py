@@ -43,6 +43,13 @@ with st.sidebar:
         st.success("Identidade confirmada")
     else:
         st.caption("Identidade ainda não confirmada")
+    interview = conversation.flow.state.interview
+    if conversation.flow.state.current_agent == AgentType.INTERVIEW and interview is not None:
+        completed = interview.completed_fields()
+        total = interview.total_fields()
+        current = min(completed + 1, total)
+        st.caption(f"Entrevista financeira · etapa {current} de {total}")
+        st.progress(completed / total)
     st.markdown(
         "Estou aqui para ajudar com:\n\n"
         "- **Seu limite de crédito**\n- **Pedidos de aumento**\n- **Cotações em reais**"

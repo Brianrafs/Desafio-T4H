@@ -52,3 +52,9 @@ def test_invalid_dependents(value):
 def test_reversed_score_range():
     with pytest.raises(ValidationError):
         ScoreRange(score_min=500, score_max=400, limite_maximo=1000)
+
+
+def test_interview_progress_counts_only_confirmed_fields():
+    context = CreditInterviewContext(monthly_income=1000, dependents=0)
+    assert context.completed_fields() == 2
+    assert context.total_fields() == 5
