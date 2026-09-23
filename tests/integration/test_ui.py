@@ -2,11 +2,13 @@ import json
 from pathlib import Path
 
 import httpx
+import pytest
 from streamlit.testing.v1 import AppTest
 
 from banco_agil.conversation import Conversation
 from banco_agil.flow.banking_flow import BankingFlow
 from banco_agil.models.agent_outputs import CreditTurnResult, InterviewTurnResult, TriageTurnResult
+from banco_agil.models.errors import RepositoryError
 from banco_agil.models.state import CreditInterviewContext
 from banco_agil.presentation import WELCOME
 from banco_agil.providers.groq import GroqProvider
@@ -236,3 +238,28 @@ def test_interview_progress_is_rendered(data_dir, monkeypatch):
     app.run()
     assert any("etapa 2 de 5" in item.value for item in app.caption)
     assert app.get("progress")[0].proto.value == 20
+
+
+@pytest.mark.parametrize("error", [RepositoryError(), OSError("private filesystem detail")])
+def test_failed_demo_reset_is_controlled_and_retryable(data_dir, monkeypatch, error):
+    from banco_agil.repositories.bootstrap import reset_demo_data
+
+    monkeypatch.setenv("GROQ_API_KEY", "test")
+    monkeypatch.setenv("DATA_DIR", str(data_dir))
+    app = AppTest.from_file(str(APP), default_timeout=20).run()
+    original = app.session_state.conversation.flow.state.id
+
+    def fail_reset(*args):
+        raise error
+
+    monkeypatch.setattr("banco_agil.repositories.bootstrap.reset_demo_data", fail_reset)
+    app.button(key="request_demo_reset").click().run()
+    app.button(key="confirm_demo_reset").click().run()
+    assert not app.exception
+    assert app.error
+    assert "private filesystem detail" not in app.error[0].value
+    assert app.session_state.conversation.flow.state.id == original
+    monkeypatch.setattr("banco_agil.repositories.bootstrap.reset_demo_data", reset_demo_data)
+    app.button(key="confirm_demo_reset").click().run()
+    assert not app.exception
+    assert app.session_state.conversation.flow.state.id != original

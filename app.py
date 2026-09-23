@@ -88,7 +88,14 @@ with st.sidebar:
         st.warning("Isso restaura limites, scores e solicitações dos clientes fictícios.")
         with st.container(horizontal=True):
             if st.button("Confirmar", key="confirm_demo_reset", type="primary"):
-                reset_demo_data(Path(__file__).resolve().parent / "data", settings.data_dir)
+                try:
+                    reset_demo_data(Path(__file__).resolve().parent / "data", settings.data_dir)
+                except (BankingError, OSError):
+                    st.error(
+                        "Não foi possível concluir a restauração. Alguns dados podem ter sido "
+                        "restaurados; tente novamente antes de continuar."
+                    )
+                    st.stop()
                 st.session_state.pop("conversation", None)
                 st.session_state.pop("messages", None)
                 st.session_state.pending_demo_reset = False
