@@ -9,7 +9,6 @@ from banco_agil.conversation import Conversation
 from banco_agil.flow.banking_flow import BankingFlow
 from banco_agil.models.agent_outputs import CreditTurnResult, InterviewTurnResult, TriageTurnResult
 from banco_agil.models.errors import RepositoryError
-from banco_agil.models.state import CreditInterviewContext
 from banco_agil.presentation import WELCOME
 from banco_agil.providers.groq import GroqProvider
 from banco_agil.repositories.customer_repository import CustomerRepository
@@ -95,7 +94,7 @@ def test_quick_action_and_lia_markdown(data_dir, monkeypatch):
                     cpf="00000000001",
                     birth_date="1990-01-15",
                     detected_intent="credit_limit_query",
-                    message="Vamos conferir isso juntos.",
+                    message="Entendi.",
                 ),
             ]
         ),
@@ -104,9 +103,10 @@ def test_quick_action_and_lia_markdown(data_dir, monkeypatch):
     app.button(key="quick_Consultar limite").click().run()
     assert not app.exception
     response = app.session_state.messages[-1]["content"]
-    assert response.startswith("Vamos conferir isso juntos.\n\n")
+    assert not response.startswith("Entendi.")
     assert "**R$ 1.000,00**" in response
-    assert "\n- **" in response
+    assert "avaliar um aumento" in response
+    assert "\n- **" not in response
     assert flow.state.current_agent == "triage"
     assert not app.button(key="quick_Pedir aumento").disabled
 
@@ -226,18 +226,33 @@ def test_authenticated_status_does_not_expose_cpf(data_dir, monkeypatch):
     assert "00000000001" not in rendered
 
 
-def test_interview_progress_is_rendered(data_dir, monkeypatch):
+def test_interview_progress_is_rendered_in_latest_assistant_bubble(data_dir, monkeypatch):
     monkeypatch.setenv("GROQ_API_KEY", "test")
     flow = BankingFlow(data_dir)
-    flow.state.authenticated = True
-    flow.state.authenticated_customer_cpf = "00000000001"
-    flow.state.current_agent = "credit_interview"
-    flow.state.interview = CreditInterviewContext(monthly_income=10000)
     app = AppTest.from_file(str(APP), default_timeout=20)
-    app.session_state["conversation"] = Conversation(flow, ScriptedProvider([]))
+    app.session_state["conversation"] = Conversation(
+        flow,
+        ScriptedProvider(
+            [
+                TriageTurnResult(
+                    cpf="00000000001",
+                    birth_date="1990-01-15",
+                    detected_intent="credit_limit_increase",
+                    requested_limit=4000,
+                ),
+                CreditTurnResult(interview_accepted=True),
+            ]
+        ),
+    )
     app.run()
-    assert any("etapa 2 de 5" in item.value for item in app.caption)
-    assert app.get("progress")[0].proto.value == 20
+    app.chat_input[0].set_value("Quero um limite de 4000").run()
+    app.chat_input[0].set_value("Sim").run()
+
+    assert not app.exception
+    assert not app.sidebar.get("progress")
+    assert any("etapa 1 de 5" in item.value for item in app.caption)
+    assert len(app.get("progress")) == 1
+    assert app.get("progress")[0].proto.value == 0
 
 
 @pytest.mark.parametrize("error", [RepositoryError(), OSError("private filesystem detail")])

@@ -43,13 +43,6 @@ with st.sidebar:
         st.success("Identidade confirmada")
     else:
         st.caption("Identidade ainda não confirmada")
-    interview = conversation.flow.state.interview
-    if conversation.flow.state.current_agent == AgentType.INTERVIEW and interview is not None:
-        completed = interview.completed_fields()
-        total = interview.total_fields()
-        current = min(completed + 1, total)
-        st.caption(f"Entrevista financeira · etapa {current} de {total}")
-        st.progress(completed / total)
     st.markdown(
         "Estou aqui para ajudar com:\n\n"
         "- **Seu limite de crédito**\n- **Pedidos de aumento**\n- **Cotações em reais**"
@@ -58,10 +51,6 @@ with st.sidebar:
     with st.expander("Dados para experimentar"):
         st.write("**Ana** · CPF: 000.000.000-01 · Nascimento: 15/01/1990")
         st.write("**Bruno** · CPF: 000.000.000-02 · Nascimento: 20/05/1985")
-    from pathlib import Path
-
-    from banco_agil.repositories.bootstrap import reset_demo_data
-
     if st.button("Nova conversa", key="request_new_conversation", icon=":material/add:"):
         st.session_state.pending_new_conversation = True
 
@@ -118,6 +107,12 @@ for message in st.session_state.messages:
     ):
         if is_lia:
             st.caption("Lia · Banco Ágil")
+            progress = message.get("interview_progress")
+            if progress is not None:
+                st.caption(
+                    f"Entrevista de crédito · etapa {progress['current']} de {progress['total']}"
+                )
+                st.progress(progress["completed"] / progress["total"])
         st.markdown(message["content"])
 
 if finished:
@@ -151,12 +146,36 @@ if prompt:
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.write(prompt)
+    was_interview = conversation.flow.state.current_agent == AgentType.INTERVIEW
     with (
         st.chat_message("Lia", avatar=":material/support_agent:"),
         st.spinner("A Lia está cuidando disso…"),
     ):
         st.caption("Lia · Banco Ágil")
         response = asyncio.run(conversation.send(prompt))
+        interview = conversation.flow.state.interview
+        progress = None
+        if (
+            conversation.flow.state.status == ConversationStatus.ACTIVE
+            and interview is not None
+            and (was_interview or conversation.flow.state.current_agent == AgentType.INTERVIEW)
+        ):
+            completed = interview.completed_fields()
+            total = interview.total_fields()
+            progress = {
+                "completed": completed,
+                "current": total if interview.completed else min(completed + 1, total),
+                "total": total,
+            }
+            st.caption(
+                f"Entrevista de crédito · etapa {progress['current']} de {progress['total']}"
+            )
+            st.progress(progress["completed"] / progress["total"])
         st.markdown(response)
-    st.session_state.messages.append({"role": "assistant", "content": response})
+    for message in st.session_state.messages:
+        message.pop("interview_progress", None)
+    assistant_message = {"role": "assistant", "content": response}
+    if progress is not None:
+        assistant_message["interview_progress"] = progress
+    st.session_state.messages.append(assistant_message)
     st.rerun()

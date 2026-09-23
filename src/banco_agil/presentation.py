@@ -12,7 +12,6 @@ WELCOME = (
     "Estou aqui para ajudar você, uma etapa de cada vez.\n\n"
     "**O que podemos fazer juntos?**\n\n" + OPTIONS + "\n\nPor onde você gostaria de começar?"
 )
-NEXT_STEPS = "Quer aproveitar para fazer mais alguma coisa?\n\n" + OPTIONS
 CLOSED = (
     "Nossa conversa foi encerrada. Foi bom ter você por aqui!\n\n"
     "Quando precisar, é só clicar em **Nova conversa**. Até mais!\n\n**Lia · Banco Ágil**"
@@ -26,6 +25,16 @@ def with_lia_voice(body: str, acknowledgement: str) -> str:
     ou direcionar o cliente a links. Se sair desse escopo, usamos apenas o corpo.
     """
     opening = acknowledgement.strip()
+    normalized = re.sub(r"[^a-zà-ÿ]+", " ", opening.casefold()).strip()
+    generic = {
+        "entendi",
+        "certo",
+        "perfeito",
+        "claro",
+        "vamos lá",
+        "combinado",
+        "vamos conferir isso juntos",
+    }
     forbidden = (
         r"\d|https?://|www\.|@|[\[\]<>]|\n|"
         r"aprov|reprov|rejeit|autentic|confirm|garant|liber|score|juros|taxa|"
@@ -33,6 +42,11 @@ def with_lia_voice(body: str, acknowledgement: str) -> str:
         r"|\b(?:vou|vamos|iremos|vai|posso|consigo|irei)\s+"
         r"(?:aument|solicit|conced|alter|atualiz|elevar|conseguir)"
     )
-    if not opening or len(opening) > 220 or re.search(forbidden, opening, re.IGNORECASE):
+    if (
+        not opening
+        or normalized in generic
+        or len(opening) > 220
+        or re.search(forbidden, opening, re.IGNORECASE)
+    ):
         return body
     return f"{opening}\n\n{body}"

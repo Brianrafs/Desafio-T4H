@@ -33,3 +33,21 @@ def test_acknowledgement_cannot_replace_facts_or_ask_for_credentials(opening):
     assert with_lia_voice("Resultado confirmado pelo serviço.", opening) == (
         "Resultado confirmado pelo serviço."
     )
+
+
+@pytest.mark.parametrize(
+    "opening",
+    [
+        "Entendi.",
+        "Certo!",
+        "Perfeito.",
+        "Claro.",
+        "Vamos lá!",
+        "Combinado.",
+        "Vamos conferir isso juntos.",
+    ],
+)
+def test_generic_acknowledgement_is_not_added_to_every_reply(opening):
+    body = "Seu limite atual é **R$ 1.000,00**."
+
+    assert with_lia_voice(body, opening) == body
