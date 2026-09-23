@@ -108,6 +108,7 @@ class BankingFlow(Flow[SessionState]):
 
     async def _triage(self, result: TriageTurnResult) -> str:
         state = self.state
+        identity_confirmation = ""
         if result.detected_intent not in (None, IntentType.UNKNOWN):
             state.pending_intent = result.detected_intent
         if result.requested_limit is not None:
@@ -161,9 +162,14 @@ class BankingFlow(Flow[SessionState]):
             state.authenticated_customer_cpf = customer.cpf
             state.authenticated = True
             state.authentication_attempts = 0
+            first_name = customer.nome.split(maxsplit=1)[0]
+            identity_confirmation = f"Pronto, {first_name}. Confirmei sua identidade."
             record(Event.AUTHENTICATION_SUCCEEDED, state.session_id)
             self._checkpoint()
-        return await self._resume_intent()
+        response = await self._resume_intent()
+        if identity_confirmation:
+            return f"{identity_confirmation}\n\n{response}"
+        return response
 
     def _service_information(self, topic: InformationTopic) -> str:
         response = INFORMATION_RESPONSES[topic]

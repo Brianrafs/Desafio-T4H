@@ -60,10 +60,15 @@ async def test_follow_up_has_last_reply_without_old_credentials(data_dir):
     first = await conversation.send("Meu limite, CPF 00000000001, nascimento 1990-01-15")
     await conversation.send("sim")
     messages = bodies[1]["messages"]
-    assert messages[-2] == {"role": "assistant", "content": first}
+    assert messages[-2]["role"] == "assistant"
+    assert "Seu limite de crédito atual" in messages[-2]["content"]
+    assert messages[-2]["content"] != first
     assert messages[-1] == {"role": "user", "content": "sim"}
-    assert "00000000001" not in json.dumps(messages)
-    assert "1990-01-15" not in json.dumps(messages)
+    serialized_messages = json.dumps(messages)
+    assert "00000000001" not in serialized_messages
+    assert "1990-01-15" not in serialized_messages
+    assert "Ana" not in serialized_messages
+    assert "Demonstração" not in serialized_messages
     assert flow.state.current_agent == "triage"
 
 

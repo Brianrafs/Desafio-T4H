@@ -51,6 +51,16 @@ INFORMATION_RESPONSES = {
 }
 
 
+def without_identity_confirmation(message: str) -> str:
+    """Remove o nome do contexto conversacional que será enviado ao modelo."""
+    return re.sub(
+        r"Pronto, [^\n]+\. Confirmei sua identidade\.\n\n",
+        "",
+        message,
+        count=1,
+    )
+
+
 def with_lia_voice(body: str, acknowledgement: str) -> str:
     """Acrescenta acolhimento contextual; fatos e próximos passos vêm do Flow.
 

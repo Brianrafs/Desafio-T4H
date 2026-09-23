@@ -3,7 +3,12 @@ from banco_agil.models.agent_outputs import OUTPUT_TYPES
 from banco_agil.models.errors import LLMError
 from banco_agil.models.state import ConversationStatus
 from banco_agil.observability import Event, record
-from banco_agil.presentation import CLOSED, WELCOME, with_lia_voice
+from banco_agil.presentation import (
+    CLOSED,
+    WELCOME,
+    with_lia_voice,
+    without_identity_confirmation,
+)
 from banco_agil.providers.groq import LLMProvider
 
 
@@ -39,5 +44,5 @@ class Conversation:
         if self.flow.state.last_error_code is None:
             if self.flow.state.status != ConversationStatus.FINISHED:
                 response = with_lia_voice(response, result.message)
-            self.last_reply = response
+            self.last_reply = without_identity_confirmation(response)
         return response
