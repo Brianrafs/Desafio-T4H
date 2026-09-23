@@ -62,6 +62,12 @@ class BankingFlow(Flow[SessionState]):
         if self.state.status == ConversationStatus.FINISHED:
             return CLOSED
         if not isinstance(result, OUTPUT_TYPES[self.state.current_agent]):
+            self.state.last_error_code = LLMStructuredOutputError.code
+            record(
+                Event.OPERATION_FAILED,
+                self.state.session_id,
+                error_code=LLMStructuredOutputError.code,
+            )
             return LLMStructuredOutputError.user_message
         self._checkpoint()
         self._turn_result = result

@@ -1,7 +1,8 @@
 import pytest
 
 from banco_agil.flow.banking_flow import BankingFlow
-from banco_agil.models.agent_outputs import TriageTurnResult
+from banco_agil.models.agent_outputs import CreditTurnResult, TriageTurnResult
+from banco_agil.models.errors import LLMStructuredOutputError
 
 
 async def test_progressive_authentication(data_dir):
@@ -41,3 +42,20 @@ async def test_transition_cannot_bypass_authentication(data_dir, intent):
     await flow.process(TriageTurnResult(transition_request=intent))
     assert not flow.state.authenticated
     assert flow.state.current_agent == "triage"
+
+
+async def test_incomplete_authentication_does_not_consume_attempt(data_dir):
+    flow = BankingFlow(data_dir)
+    await flow.process(TriageTurnResult(cpf="00000000001"))
+    await flow.process(TriageTurnResult())
+    assert flow.state.authentication_attempts == 0
+    assert flow.state.authentication.cpf == "00000000001"
+
+
+async def test_incompatible_turn_result_records_controlled_error(data_dir):
+    flow = BankingFlow(data_dir)
+    before = flow.state.model_dump(exclude={"last_error_code"})
+    response = await flow.process(CreditTurnResult(detected_intent="credit_limit_query"))
+    assert response == LLMStructuredOutputError.user_message
+    assert flow.state.last_error_code == "invalid_llm_output"
+    assert flow.state.model_dump(exclude={"last_error_code"}) == before

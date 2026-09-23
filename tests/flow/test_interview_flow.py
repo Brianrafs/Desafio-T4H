@@ -112,3 +112,12 @@ async def test_retry_after_interview_does_not_duplicate_request(data_dir, monkey
         "rejeitado",
         "aprovado",
     ]
+
+
+async def test_ambiguous_interview_answer_keeps_confirmation_pending(data_dir):
+    flow = await rejected_flow(data_dir)
+    response = await flow.process(CreditTurnResult(interview_accepted=None))
+    assert flow.state.current_agent == "credit"
+    assert flow.state.credit.awaiting_interview_confirmation
+    assert flow.state.interview is None
+    assert "sim" in response and "não" in response
