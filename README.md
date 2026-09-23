@@ -72,7 +72,7 @@ tests/                     Unitários, Flow, tools, integrações e UI
 - Conversa contínua com Lia, respostas em Markdown e atalhos para novas operações.
 - Status **Identidade confirmada** sem CPF e aviso visível de que as mensagens do chat são processadas pela Groq.
 - Reinício de sessão e restauração da demonstração com confirmações separadas.
-- Ao mudar para câmbio com um pedido de aumento incompleto, Lia informa que o pedido não foi enviado.
+- Ao mudar para câmbio com um pedido de aumento incompleto, Lia explica a interrupção e oferece consultar o limite antes de retomar o pedido, inclusive após falhas de persistência.
 
 ## Desafios Enfrentados e Como Foram Resolvidos
 

@@ -358,7 +358,7 @@ class BankingFlow(Flow[SessionState]):
         )
         if interrupted_credit:
             body += (
-                "\n\nSeu pedido de aumento ainda não foi enviado. "
-                "Quando quiser, podemos iniciar uma nova solicitação."
+                "\n\nSeu pedido de aumento ficou interrompido. "
+                "Podemos consultar seu limite para conferir a situação antes de retomar o pedido."
             )
         return self._complete_operation(body)
