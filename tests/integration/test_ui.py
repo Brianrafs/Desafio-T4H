@@ -2,12 +2,17 @@ import json
 from pathlib import Path
 
 import httpx
+import pytest
 from streamlit.testing.v1 import AppTest
 
 from banco_agil.conversation import Conversation
 from banco_agil.flow.banking_flow import BankingFlow
 from banco_agil.models.agent_outputs import CreditTurnResult, InterviewTurnResult, TriageTurnResult
+from banco_agil.models.errors import RepositoryError
+from banco_agil.models.state import CreditInterviewContext
+from banco_agil.presentation import WELCOME
 from banco_agil.providers.groq import GroqProvider
+from banco_agil.repositories.customer_repository import CustomerRepository
 from banco_agil.services.exchange_service import ExchangeService
 
 APP = Path(__file__).parents[2] / "app.py"
@@ -72,7 +77,8 @@ def test_golden_path_through_chat(data_dir, monkeypatch):
     assert any("4.000,00" in message["content"] for message in app.session_state.messages)
     app.chat_input[0].set_value("encerrar").run()
     assert app.chat_input[0].disabled
-    app.button(key="new_conversation").click().run()
+    app.button(key="request_new_conversation").click().run()
+    app.button(key="confirm_new_conversation").click().run()
     assert not app.exception
     assert not app.session_state.conversation.flow.state.authenticated
 
@@ -158,3 +164,102 @@ def test_actual_agents_and_exchange_through_ui(data_dir, monkeypatch):
     assert flow.state.authenticated
     app.button(key="end_conversation").click().run()
     assert flow.state.status == "finished"
+
+
+def test_reset_demo_data_requires_confirmation(data_dir, monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "test")
+    monkeypatch.setenv("DATA_DIR", str(data_dir))
+    customers = CustomerRepository(data_dir)
+    customer = customers.require("00000000001")
+    customer.limite_credito = 2000
+    customers.save(customer)
+
+    app = AppTest.from_file(str(APP), default_timeout=20).run()
+    app.button(key="request_demo_reset").click().run()
+    assert CustomerRepository(data_dir).require("00000000001").limite_credito == 2000
+
+    app.button(key="confirm_demo_reset").click().run()
+
+    assert not app.exception
+    assert CustomerRepository(data_dir).require("00000000001").limite_credito == 1000
+    assert app.session_state.messages[0]["content"] == WELCOME
+
+
+def test_new_conversation_requires_confirmation(data_dir, monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "test")
+    monkeypatch.setenv("DATA_DIR", str(data_dir))
+    flow = BankingFlow(data_dir)
+    flow.state.authenticated = True
+    flow.state.authenticated_customer_cpf = "00000000001"
+    app = AppTest.from_file(str(APP), default_timeout=20)
+    app.session_state["conversation"] = Conversation(flow, ScriptedProvider([]))
+    app.run()
+
+    app.button(key="request_new_conversation").click().run()
+    assert app.session_state.conversation.flow.state.authenticated
+
+    app.button(key="confirm_new_conversation").click().run()
+    assert not app.session_state.conversation.flow.state.authenticated
+    assert app.session_state.messages == [{"role": "assistant", "content": WELCOME}]
+
+
+def test_privacy_notice_is_visible_before_chat(tmp_path, monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "")
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    app = AppTest.from_file(str(APP), default_timeout=20).run()
+    rendered = " ".join(element.value for element in app.caption)
+    assert "dados fictícios" in rendered
+    assert "Groq" in rendered
+
+
+def test_authenticated_status_does_not_expose_cpf(data_dir, monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "test")
+    monkeypatch.setenv("DATA_DIR", str(data_dir))
+    flow = BankingFlow(data_dir)
+    flow.state.authenticated = True
+    flow.state.authenticated_customer_cpf = "00000000001"
+    app = AppTest.from_file(str(APP), default_timeout=20)
+    app.session_state["conversation"] = Conversation(flow, ScriptedProvider([]))
+    app.run()
+    rendered = " ".join(element.value for element in [*app.caption, *app.success])
+    assert "Identidade confirmada" in rendered
+    assert "00000000001" not in rendered
+
+
+def test_interview_progress_is_rendered(data_dir, monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "test")
+    flow = BankingFlow(data_dir)
+    flow.state.authenticated = True
+    flow.state.authenticated_customer_cpf = "00000000001"
+    flow.state.current_agent = "credit_interview"
+    flow.state.interview = CreditInterviewContext(monthly_income=10000)
+    app = AppTest.from_file(str(APP), default_timeout=20)
+    app.session_state["conversation"] = Conversation(flow, ScriptedProvider([]))
+    app.run()
+    assert any("etapa 2 de 5" in item.value for item in app.caption)
+    assert app.get("progress")[0].proto.value == 20
+
+
+@pytest.mark.parametrize("error", [RepositoryError(), OSError("private filesystem detail")])
+def test_failed_demo_reset_is_controlled_and_retryable(data_dir, monkeypatch, error):
+    from banco_agil.repositories.bootstrap import reset_demo_data
+
+    monkeypatch.setenv("GROQ_API_KEY", "test")
+    monkeypatch.setenv("DATA_DIR", str(data_dir))
+    app = AppTest.from_file(str(APP), default_timeout=20).run()
+    original = app.session_state.conversation.flow.state.id
+
+    def fail_reset(*args):
+        raise error
+
+    monkeypatch.setattr("banco_agil.repositories.bootstrap.reset_demo_data", fail_reset)
+    app.button(key="request_demo_reset").click().run()
+    app.button(key="confirm_demo_reset").click().run()
+    assert not app.exception
+    assert app.error
+    assert "private filesystem detail" not in app.error[0].value
+    assert app.session_state.conversation.flow.state.id == original
+    monkeypatch.setattr("banco_agil.repositories.bootstrap.reset_demo_data", reset_demo_data)
+    app.button(key="confirm_demo_reset").click().run()
+    assert not app.exception
+    assert app.session_state.conversation.flow.state.id != original

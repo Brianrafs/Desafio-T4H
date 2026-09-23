@@ -6,7 +6,7 @@ from banco_agil.presentation import WELCOME, with_lia_voice
 def test_lia_presents_capabilities_in_markdown():
     assert "**Lia**" in WELCOME
     assert "\n\n- **" in WELCOME
-    for capability in ("Consultar", "aumento", "cotação", "Encerrar"):
+    for capability in ("Consultar", "aumento", "cotação"):
         assert capability in WELCOME
 
 

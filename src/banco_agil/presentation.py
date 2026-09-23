@@ -6,7 +6,6 @@ OPTIONS = (
     "- **Consultar meu limite** de crédito\n"
     "- **Pedir um aumento** de limite\n"
     "- **Ver uma cotação** — dólar (USD), euro (EUR) ou libra (GBP)\n"
-    "- **Encerrar** a conversa quando quiser"
 )
 WELCOME = (
     "Oi! Eu sou a **Lia**, sua assistente do **Banco Ágil**. "

@@ -1,10 +1,12 @@
 from datetime import UTC, datetime
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 
 from banco_agil.models.domain import CreditRequest
 from banco_agil.models.errors import RepositoryError, ScoreRangeNotFoundError
+from banco_agil.repositories.bootstrap import initialize_demo_data
 from banco_agil.repositories.credit_request_repository import CreditRequestRepository
 from banco_agil.repositories.customer_repository import CustomerRepository
 from banco_agil.repositories.score_range_repository import ScoreRangeRepository
@@ -77,3 +79,55 @@ def test_atomic_write_failure_preserves_original(data_dir, monkeypatch):
         repository.write(rows)
     assert repository.path.read_bytes() == original
     assert not list(data_dir.glob("*.tmp"))
+
+
+def test_score_ranges_must_cover_zero_to_thousand_without_gaps(data_dir):
+    repository = ScoreRangeRepository(data_dir)
+    rows = repository.read()
+
+    rows[0].score_min = 1
+    repository.write(rows)
+    with pytest.raises(RepositoryError):
+        repository.read()
+
+    rows[0].score_min = 0
+    rows[1].score_min = rows[0].score_max + 2
+    repository.write(rows)
+    with pytest.raises(RepositoryError):
+        repository.read()
+
+    rows[1].score_min = rows[0].score_max + 1
+    rows[-1].score_max = 999
+    repository.write(rows)
+    with pytest.raises(RepositoryError):
+        repository.read()
+
+
+def test_duplicate_customer_cpf_is_rejected(data_dir):
+    repository = CustomerRepository(data_dir)
+    rows = repository.read()
+    repository.write([*rows, rows[0].model_copy()])
+    with pytest.raises(RepositoryError):
+        repository.read()
+
+
+def test_initialization_rejects_existing_score_gap(data_dir):
+    repository = ScoreRangeRepository(data_dir)
+    rows = repository.read()
+    rows[1].score_min += 1
+    repository.write(rows)
+    with pytest.raises(RepositoryError):
+        initialize_demo_data(Path(__file__).parents[2] / "data", data_dir)
+
+
+def test_duplicate_credit_request_key_is_rejected(data_dir):
+    repository = CreditRequestRepository(data_dir)
+    request = CreditRequest(
+        cpf_cliente="00000000001",
+        data_hora_solicitacao=datetime.now(UTC),
+        limite_atual=1000,
+        novo_limite_solicitado=1500,
+    )
+    repository.write([request, request.model_copy()])
+    with pytest.raises(RepositoryError):
+        repository.read()

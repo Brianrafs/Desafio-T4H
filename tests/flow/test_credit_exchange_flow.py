@@ -2,6 +2,7 @@ import httpx
 
 from banco_agil.flow.banking_flow import BankingFlow
 from banco_agil.models.agent_outputs import CreditTurnResult, ExchangeTurnResult, TriageTurnResult
+from banco_agil.models.errors import RepositoryError
 from banco_agil.services.exchange_service import ExchangeService
 
 
@@ -56,3 +57,45 @@ async def test_exchange_failure_preserves_state(data_dir):
     assert flow.state.current_agent == "credit"
     assert flow.state.authenticated
     assert flow.state.last_error_code == "exchange_unavailable"
+
+
+async def test_switching_to_exchange_explains_incomplete_credit_request(data_dir):
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(200, json={"EURBRL": {"bid": "6"}})
+    )
+    flow = BankingFlow(data_dir, ExchangeService(transport=transport))
+    await authenticate(flow, "credit_limit_increase")
+    assert flow.state.credit.awaiting_requested_limit
+
+    reply = await flow.process(
+        CreditTurnResult(transition_request="go_to_exchange", currency="EUR")
+    )
+
+    assert "pedido de aumento ficou interrompido" in reply
+    assert not flow.state.credit.awaiting_requested_limit
+    assert flow.state.current_agent == "triage"
+
+
+async def test_exchange_does_not_deny_submission_after_partial_write(data_dir, monkeypatch):
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(200, json={"EURBRL": {"bid": "6"}})
+    )
+    flow = BankingFlow(data_dir, ExchangeService(transport=transport))
+    await authenticate(flow, "credit_limit_increase")
+    save = flow.tools.credit.requests.save
+
+    def fail_save(request):
+        raise RepositoryError()
+
+    monkeypatch.setattr(flow.tools.credit.requests, "save", fail_save)
+    await flow.process(CreditTurnResult(requested_limit=2000))
+    assert flow.tools.credit.requests.read()[0].status_pedido == "pendente"
+    reply = await flow.process(
+        CreditTurnResult(currency="EUR", transition_request="go_to_exchange")
+    )
+    assert "não foi enviado" not in reply
+    assert "consultar seu limite" in reply
+    monkeypatch.setattr(flow.tools.credit.requests, "save", save)
+    await flow.process(TriageTurnResult(detected_intent="credit_limit_query"))
+    assert flow.tools.credit.requests.read()[0].status_pedido == "aprovado"
+    assert len(flow.tools.credit.requests.read()) == 1

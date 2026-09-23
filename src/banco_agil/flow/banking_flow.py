@@ -62,6 +62,12 @@ class BankingFlow(Flow[SessionState]):
         if self.state.status == ConversationStatus.FINISHED:
             return CLOSED
         if not isinstance(result, OUTPUT_TYPES[self.state.current_agent]):
+            self.state.last_error_code = LLMStructuredOutputError.code
+            record(
+                Event.OPERATION_FAILED,
+                self.state.session_id,
+                error_code=LLMStructuredOutputError.code,
+            )
             return LLMStructuredOutputError.user_message
         self._checkpoint()
         self._turn_result = result
@@ -344,8 +350,15 @@ class BankingFlow(Flow[SessionState]):
         timestamp = (
             f"\n\nAtualizada em {quote.quoted_at:%d/%m/%Y às %H:%M} UTC." if quote.quoted_at else ""
         )
-        return self._complete_operation(
+        interrupted_credit = self.state.credit.awaiting_requested_limit
+        body = (
             f"**Cotação de {quote.currency}**\n\n"
             f"**1 {quote.currency} = R$ {quote.bid:.4f}**\n\n"
             f"Valor de compra em reais.{timestamp}"
         )
+        if interrupted_credit:
+            body += (
+                "\n\nSeu pedido de aumento ficou interrompido. "
+                "Podemos consultar seu limite para conferir a situação antes de retomar o pedido."
+            )
+        return self._complete_operation(body)

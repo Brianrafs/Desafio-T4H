@@ -1,4 +1,5 @@
 import asyncio
+from pathlib import Path
 
 import streamlit as st
 
@@ -7,10 +8,12 @@ from banco_agil.config import Settings
 from banco_agil.models.errors import BankingError
 from banco_agil.models.state import AgentType, ConversationStatus
 from banco_agil.presentation import WELCOME
+from banco_agil.repositories.bootstrap import reset_demo_data
 
 st.set_page_config(page_title="Banco Ágil | Atendimento", page_icon=":material/account_balance:")
 st.title("Banco Ágil")
 st.caption("Converse com a Lia · Seu atendimento, em uma conversa.")
+st.caption("Demonstração com dados fictícios. As mensagens do chat são processadas pela Groq.")
 
 settings = Settings()
 
@@ -36,6 +39,17 @@ configured = bool(settings.groq_api_key.get_secret_value())
 
 with st.sidebar:
     st.subheader("Lia · Banco Ágil")
+    if conversation.flow.state.authenticated:
+        st.success("Identidade confirmada")
+    else:
+        st.caption("Identidade ainda não confirmada")
+    interview = conversation.flow.state.interview
+    if conversation.flow.state.current_agent == AgentType.INTERVIEW and interview is not None:
+        completed = interview.completed_fields()
+        total = interview.total_fields()
+        current = min(completed + 1, total)
+        st.caption(f"Entrevista financeira · etapa {current} de {total}")
+        st.progress(completed / total)
     st.markdown(
         "Estou aqui para ajudar com:\n\n"
         "- **Seu limite de crédito**\n- **Pedidos de aumento**\n- **Cotações em reais**"
@@ -44,10 +58,51 @@ with st.sidebar:
     with st.expander("Dados para experimentar"):
         st.write("**Ana** · CPF: 000.000.000-01 · Nascimento: 15/01/1990")
         st.write("**Bruno** · CPF: 000.000.000-02 · Nascimento: 20/05/1985")
-    if st.button("Nova conversa", key="new_conversation", icon=":material/add:"):
-        del st.session_state.conversation
-        del st.session_state.messages
-        st.rerun()
+    from pathlib import Path
+
+    from banco_agil.repositories.bootstrap import reset_demo_data
+
+    if st.button("Nova conversa", key="request_new_conversation", icon=":material/add:"):
+        st.session_state.pending_new_conversation = True
+
+    if st.session_state.get("pending_new_conversation", False):
+        st.warning("A conversa atual será encerrada. Os dados persistidos não serão restaurados.")
+        with st.container(horizontal=True):
+            if st.button("Confirmar", key="confirm_new_conversation", type="primary"):
+                st.session_state.pop("conversation", None)
+                st.session_state.pop("messages", None)
+                st.session_state.pending_new_conversation = False
+                st.rerun()
+            if st.button("Cancelar", key="cancel_new_conversation"):
+                st.session_state.pending_new_conversation = False
+                st.rerun()
+
+    if st.button(
+        "Restaurar dados da demonstração",
+        key="request_demo_reset",
+        icon=":material/restart_alt:",
+    ):
+        st.session_state.pending_demo_reset = True
+
+    if st.session_state.get("pending_demo_reset", False):
+        st.warning("Isso restaura limites, scores e solicitações dos clientes fictícios.")
+        with st.container(horizontal=True):
+            if st.button("Confirmar", key="confirm_demo_reset", type="primary"):
+                try:
+                    reset_demo_data(Path(__file__).resolve().parent / "data", settings.data_dir)
+                except (BankingError, OSError):
+                    st.error(
+                        "Não foi possível concluir a restauração. Alguns dados podem ter sido "
+                        "restaurados; tente novamente antes de continuar."
+                    )
+                    st.stop()
+                st.session_state.pop("conversation", None)
+                st.session_state.pop("messages", None)
+                st.session_state.pending_demo_reset = False
+                st.rerun()
+            if st.button("Cancelar", key="cancel_demo_reset"):
+                st.session_state.pending_demo_reset = False
+                st.rerun()
     if st.button("Encerrar atendimento", key="end_conversation", disabled=finished):
         reply = asyncio.run(conversation.send("encerrar"))
         st.session_state.messages.append({"role": "assistant", "content": reply})
