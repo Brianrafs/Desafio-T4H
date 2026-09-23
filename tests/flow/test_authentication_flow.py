@@ -35,6 +35,22 @@ async def test_successful_authentication_confirms_first_name_once(data_dir):
     assert "Ana" not in second
 
 
+async def test_authentication_confirmation_survives_following_operation_error(data_dir):
+    flow = BankingFlow(data_dir)
+
+    response = await flow.process(
+        TriageTurnResult(
+            cpf="00000000001",
+            birth_date="1990-01-15",
+            detected_intent="credit_limit_increase",
+            requested_limit=0,
+        )
+    )
+
+    assert "Pronto, Ana. Confirmei sua identidade." in response
+    assert flow.state.authenticated
+
+
 async def test_third_failure_ends_session(data_dir):
     flow = BankingFlow(data_dir)
     invalid = TriageTurnResult(cpf="00000000001", birth_date="2000-01-01")

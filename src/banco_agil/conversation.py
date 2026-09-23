@@ -42,7 +42,10 @@ class Conversation:
         response = await self.flow.process(result)
         # Um erro não substitui a pergunta que o cliente estava respondendo.
         if self.flow.state.last_error_code is None:
-            if self.flow.state.status != ConversationStatus.FINISHED:
+            if (
+                self.flow.state.status != ConversationStatus.FINISHED
+                and result.information_topic is None
+            ):
                 response = with_lia_voice(response, result.message)
             self.last_reply = without_identity_confirmation(response)
         return response

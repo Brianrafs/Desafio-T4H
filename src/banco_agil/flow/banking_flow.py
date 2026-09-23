@@ -37,6 +37,7 @@ class BankingFlow(Flow[SessionState]):
     _tools: SessionTools = PrivateAttr()
     _turn_result: TurnResult | None = PrivateAttr(default=None)
     _rollback_state: SessionState | None = PrivateAttr(default=None)
+    _identity_confirmation: str = PrivateAttr(default="")
 
     def __init__(self, data_dir: Path, exchange: ExchangeService | None = None, **kwargs):
         configure_logging()
@@ -69,6 +70,7 @@ class BankingFlow(Flow[SessionState]):
                 error_code=LLMStructuredOutputError.code,
             )
             return LLMStructuredOutputError.user_message
+        self._identity_confirmation = ""
         self._checkpoint()
         self._turn_result = result
         try:
@@ -80,10 +82,13 @@ class BankingFlow(Flow[SessionState]):
                 setattr(self.state, name, getattr(self._rollback_state, name))
             self.state.last_error_code = exc.code
             record(Event.OPERATION_FAILED, self.state.session_id, error_code=exc.code)
+            if self._identity_confirmation:
+                return f"{self._identity_confirmation}\n\n{exc.user_message}"
             return exc.user_message
         finally:
             self._turn_result = None
             self._rollback_state = None
+            self._identity_confirmation = ""
 
     def _checkpoint(self) -> None:
         self._rollback_state = self.state.model_copy(deep=True)
@@ -108,7 +113,6 @@ class BankingFlow(Flow[SessionState]):
 
     async def _triage(self, result: TriageTurnResult) -> str:
         state = self.state
-        identity_confirmation = ""
         if result.detected_intent not in (None, IntentType.UNKNOWN):
             state.pending_intent = result.detected_intent
         if result.requested_limit is not None:
@@ -163,12 +167,12 @@ class BankingFlow(Flow[SessionState]):
             state.authenticated = True
             state.authentication_attempts = 0
             first_name = customer.nome.split(maxsplit=1)[0]
-            identity_confirmation = f"Pronto, {first_name}. Confirmei sua identidade."
+            self._identity_confirmation = f"Pronto, {first_name}. Confirmei sua identidade."
             record(Event.AUTHENTICATION_SUCCEEDED, state.session_id)
             self._checkpoint()
         response = await self._resume_intent()
-        if identity_confirmation:
-            return f"{identity_confirmation}\n\n{response}"
+        if self._identity_confirmation:
+            return f"{self._identity_confirmation}\n\n{response}"
         return response
 
     def _service_information(self, topic: InformationTopic) -> str:
@@ -180,11 +184,11 @@ class BankingFlow(Flow[SessionState]):
 
     def _pending_question(self) -> str:
         state = self.state
-        if not state.authenticated and state.pending_intent is not None:
-            if state.authentication.cpf is None:
-                return "pode me informar seu **CPF**?"
-            if state.authentication.birth_date is None:
+        if not state.authenticated:
+            if state.authentication.cpf is not None and state.authentication.birth_date is None:
                 return "qual é sua **data de nascimento**? Use o formato **dia/mês/ano**."
+            if state.authentication.birth_date is not None or state.pending_intent is not None:
+                return "pode me informar seu **CPF**?"
         if state.current_agent == AgentType.CREDIT:
             if state.credit.awaiting_requested_limit:
                 return "qual **limite total** você gostaria de ter?"

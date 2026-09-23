@@ -78,6 +78,16 @@ async def test_information_during_authentication_resumes_cpf_request(data_dir):
     assert flow.state.pending_intent == "credit_limit_query"
 
 
+async def test_information_resumes_birth_date_after_unsolicited_cpf(data_dir):
+    flow = BankingFlow(data_dir)
+    await flow.process(TriageTurnResult(cpf="00000000001"))
+
+    response = await flow.process(TriageTurnResult(information_topic="authentication"))
+
+    assert "qual é sua **data de nascimento**?" in response
+    assert flow.state.authentication.cpf == "00000000001"
+
+
 async def test_information_during_interview_resumes_current_question(data_dir):
     flow = BankingFlow(data_dir)
     await flow.process(

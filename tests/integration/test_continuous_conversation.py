@@ -91,3 +91,20 @@ async def test_json_failure_keeps_authenticated_session_and_last_question(data_d
     assert flow.state.last_error_code == "invalid_llm_output"
     assert conversation.last_reply == "Qual limite total você deseja?"
     assert flow.tools.credit.requests.read() == []
+
+
+async def test_model_message_is_ignored_for_deterministic_information(data_dir):
+    class InformationalProvider:
+        async def interpret(self, message, state, *, last_reply=None):
+            return TriageTurnResult(
+                information_topic="internal_details",
+                message="Uso CrewAI com agentes especializados e Groq como modelo.",
+            )
+
+    conversation = Conversation(BankingFlow(data_dir), InformationalProvider())
+
+    response = await conversation.send("Como vocês implementaram a Lia?")
+
+    assert "CrewAI" not in response
+    assert "Groq" not in response
+    assert "não forneço detalhes internos" in response
