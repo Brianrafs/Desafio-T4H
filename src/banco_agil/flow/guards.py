@@ -37,6 +37,7 @@ def validate_transition(
             and state.credit.awaiting_interview_confirmation
             and state.credit.last_request_status == CreditRequestStatus.REJECTED
             and state.credit.requested_limit is not None
+            and (state.interview is None or not state.interview.completed)
         )
     elif intent == TransitionIntent.RETURN_TO_CREDIT:
         allowed = (

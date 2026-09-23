@@ -24,7 +24,7 @@ from banco_agil.models.state import (
     TransitionIntent,
 )
 from banco_agil.observability import Event, configure_logging, record
-from banco_agil.presentation import CLOSED, NEXT_STEPS, OPTIONS, WELCOME
+from banco_agil.presentation import CLOSED, OPTIONS, WELCOME
 from banco_agil.repositories.customer_repository import CustomerRepository
 from banco_agil.services.authentication_service import AuthenticationService
 from banco_agil.services.credit_service import CreditService
@@ -221,13 +221,12 @@ class BankingFlow(Flow[SessionState]):
             transition(self.state, result.transition_request, accepted=False)
         if result.interview_accepted is False and credit.awaiting_interview_confirmation:
             credit.awaiting_interview_confirmation = False
-            return self._complete_operation(
-                "Tudo bem, podemos deixar a entrevista para outra hora."
-            )
+            return self._complete_operation("Tudo bem. Podemos deixar a entrevista para depois.")
         if result.detected_intent == IntentType.CREDIT_LIMIT_QUERY:
             limit = await self._tools.execute("get_credit_limit")
             return self._complete_operation(
-                f"Seu limite de crédito atual é **{self._money(limit)}**."
+                f"Seu limite de crédito atual é **{self._money(limit)}**.\n\n"
+                "Se quiser, também posso avaliar um aumento para você."
             )
         if result.detected_intent == IntentType.CREDIT_LIMIT_INCREASE:
             credit.awaiting_requested_limit = True
@@ -276,8 +275,9 @@ class BankingFlow(Flow[SessionState]):
         self.state.credit.requested_limit = None
         self.state.credit.awaiting_requested_limit = False
         self.state.credit.awaiting_interview_confirmation = False
+        self.state.credit.reanalysis_pending = False
         transition(self.state, TransitionIntent.RETURN_TO_TRIAGE, operation_completed=True)
-        return response + "\n\n" + NEXT_STEPS
+        return response
 
     async def _interview(self, result: InterviewTurnResult) -> str:
         interview = self.state.interview
@@ -297,34 +297,51 @@ class BankingFlow(Flow[SessionState]):
         record(Event.CREDIT_SCORE_UPDATED, self.state.session_id)
         transition(self.state, TransitionIntent.RETURN_TO_CREDIT)
         self.state.credit.awaiting_requested_limit = True
+        self.state.credit.reanalysis_pending = True
         self._checkpoint()
-        return (
-            "Obrigada por compartilhar essas informações. **Concluímos a entrevista!**\n\n"
-            + await self._evaluate_credit()
-        )
+        return await self._evaluate_credit()
 
     async def _evaluate_credit(self) -> str:
         credit = self.state.credit
+        is_reanalysis = credit.reanalysis_pending
         result = await self._tools.execute(
             "request_credit_limit_increase", requested_limit=credit.requested_limit
         )
         credit.last_request_status = result.status_pedido
         record(Event.CREDIT_REQUEST_EVALUATED, self.state.session_id, status=result.status_pedido)
         credit.awaiting_requested_limit = False
+        interview_completed = self.state.interview is not None and self.state.interview.completed
         credit.awaiting_interview_confirmation = (
-            result.status_pedido == CreditRequestStatus.REJECTED
+            result.status_pedido == CreditRequestStatus.REJECTED and not interview_completed
         )
         if result.status_pedido == CreditRequestStatus.APPROVED:
+            if is_reanalysis:
+                return self._complete_operation(
+                    "Obrigada por responder às perguntas. Com as informações atualizadas, "
+                    "seu pedido foi **aprovado**.\n\n"
+                    f"Seu novo limite é **{self._money(result.novo_limite_solicitado)}** "
+                    "e já está disponível."
+                )
             return self._complete_operation(
-                "Tenho uma boa notícia: seu pedido foi **aprovado**!\n\n"
+                "Boa notícia: seu pedido foi **aprovado**.\n\n"
                 f"Seu novo limite é **{self._money(result.novo_limite_solicitado)}** "
-                "e já foi atualizado."
+                "e já está disponível."
+            )
+        if is_reanalysis:
+            return self._complete_operation(
+                "Obrigada por responder às perguntas. Mesmo com as informações atualizadas, "
+                "não consegui aprovar esse valor agora. Seu limite atual continua o mesmo.\n\n"
+                "Se quiser, posso consultar seu limite ou ajudar com uma cotação."
+            )
+        if interview_completed:
+            return self._complete_operation(
+                "Não consegui aprovar esse valor agora, então seu limite continua o mesmo.\n\n"
+                "Se quiser, posso consultar seu limite ou ajudar com uma cotação."
             )
         return (
-            "Desta vez, o pedido **não foi aprovado**. Seu limite atual continua o mesmo.\n\n"
-            "Se você quiser, podemos fazer uma **breve entrevista financeira** "
-            "e reavaliar o valor solicitado com suas informações atualizadas.\n\n"
-            "**Quer tentar?** Pode responder sim ou não. A entrevista não garante a aprovação."
+            "Não consegui aprovar esse valor agora, então seu limite continua o mesmo.\n\n"
+            "Podemos fazer uma **entrevista financeira rápida** e analisar novamente com "
+            "informações atualizadas. **Quer continuar?** Pode responder sim ou não."
         )
 
     async def _exchange(self, result: ExchangeTurnResult) -> str:
@@ -361,4 +378,6 @@ class BankingFlow(Flow[SessionState]):
                 "\n\nSeu pedido de aumento ficou interrompido. "
                 "Podemos consultar seu limite para conferir a situação antes de retomar o pedido."
             )
+        else:
+            body += "\n\nQuer consultar outra moeda ou falar sobre seu limite?"
         return self._complete_operation(body)

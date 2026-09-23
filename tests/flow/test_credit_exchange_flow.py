@@ -22,6 +22,16 @@ async def test_query_and_increase(data_dir):
     assert flow._tools.credit.get_limit("00000000001") == 2000
 
 
+async def test_completed_operation_does_not_repeat_the_full_service_menu(data_dir):
+    flow = BankingFlow(data_dir)
+
+    response = await authenticate(flow)
+
+    assert "1.000,00" in response
+    assert "Consultar meu limite" not in response
+    assert "Ver uma cotação" not in response
+
+
 async def test_zero_limit_is_controlled(data_dir):
     flow = BankingFlow(data_dir)
     await authenticate(flow)

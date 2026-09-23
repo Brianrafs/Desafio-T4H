@@ -52,6 +52,7 @@ class CreditConversationContext(Model):
     requested_limit: Money | None = None
     awaiting_requested_limit: bool = False
     awaiting_interview_confirmation: bool = False
+    reanalysis_pending: bool = False
     last_request_status: CreditRequestStatus | None = None
 
 
