@@ -2,7 +2,13 @@ from datetime import date
 
 from pydantic import Field
 
-from banco_agil.models.domain import EmploymentType, Model, Money, SupportedCurrency
+from banco_agil.models.domain import (
+    EmploymentType,
+    InformationTopic,
+    Model,
+    Money,
+    SupportedCurrency,
+)
 from banco_agil.models.state import IntentType, TransitionIntent
 
 
@@ -13,6 +19,7 @@ class TurnResult(Model):
         description="Frase breve de acolhimento da Lia, sem fatos financeiros, dados ou perguntas.",
     )
     end_requested: bool = False
+    information_topic: InformationTopic | None = None
 
 
 class TriageTurnResult(TurnResult):

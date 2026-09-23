@@ -1,6 +1,6 @@
 import pytest
 
-from banco_agil.presentation import WELCOME, with_lia_voice
+from banco_agil.presentation import WELCOME, with_lia_voice, without_identity_confirmation
 
 
 def test_lia_presents_capabilities_in_markdown():
@@ -8,6 +8,20 @@ def test_lia_presents_capabilities_in_markdown():
     assert "\n\n- **" in WELCOME
     for capability in ("Consultar", "aumento", "cotação"):
         assert capability in WELCOME
+
+
+def test_identity_name_is_removed_even_after_an_acknowledgement():
+    message = (
+        "Que bom poder esclarecer.\n\n"
+        "Pronto, Ana. Confirmei sua identidade.\n\n"
+        "Seu limite de crédito atual é **R$ 1.000,00**."
+    )
+
+    sanitized = without_identity_confirmation(message)
+
+    assert sanitized == (
+        "Que bom poder esclarecer.\n\nSeu limite de crédito atual é **R$ 1.000,00**."
+    )
 
 
 def test_contextual_acknowledgement_preserves_authoritative_body():

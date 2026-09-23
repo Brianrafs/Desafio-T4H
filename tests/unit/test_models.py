@@ -3,6 +3,7 @@ from decimal import Decimal
 import pytest
 from pydantic import ValidationError
 
+from banco_agil.models.agent_outputs import TurnResult
 from banco_agil.models.domain import Customer, FinancialProfile, ScoreRange
 from banco_agil.models.state import CreditInterviewContext, SessionState
 
@@ -58,3 +59,7 @@ def test_interview_progress_counts_only_confirmed_fields():
     context = CreditInterviewContext(monthly_income=1000, dependents=0)
     assert context.completed_fields() == 2
     assert context.total_fields() == 5
+
+
+def test_every_agent_output_can_classify_service_information():
+    assert "information_topic" in TurnResult.model_fields

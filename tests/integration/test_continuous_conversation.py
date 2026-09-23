@@ -60,10 +60,15 @@ async def test_follow_up_has_last_reply_without_old_credentials(data_dir):
     first = await conversation.send("Meu limite, CPF 00000000001, nascimento 1990-01-15")
     await conversation.send("sim")
     messages = bodies[1]["messages"]
-    assert messages[-2] == {"role": "assistant", "content": first}
+    assert messages[-2]["role"] == "assistant"
+    assert "Seu limite de crédito atual" in messages[-2]["content"]
+    assert messages[-2]["content"] != first
     assert messages[-1] == {"role": "user", "content": "sim"}
-    assert "00000000001" not in json.dumps(messages)
-    assert "1990-01-15" not in json.dumps(messages)
+    serialized_messages = json.dumps(messages)
+    assert "00000000001" not in serialized_messages
+    assert "1990-01-15" not in serialized_messages
+    assert "Ana" not in serialized_messages
+    assert "Demonstração" not in serialized_messages
     assert flow.state.current_agent == "triage"
 
 
@@ -86,3 +91,20 @@ async def test_json_failure_keeps_authenticated_session_and_last_question(data_d
     assert flow.state.last_error_code == "invalid_llm_output"
     assert conversation.last_reply == "Qual limite total você deseja?"
     assert flow.tools.credit.requests.read() == []
+
+
+async def test_model_message_is_ignored_for_deterministic_information(data_dir):
+    class InformationalProvider:
+        async def interpret(self, message, state, *, last_reply=None):
+            return TriageTurnResult(
+                information_topic="internal_details",
+                message="Uso CrewAI com agentes especializados e Groq como modelo.",
+            )
+
+    conversation = Conversation(BankingFlow(data_dir), InformationalProvider())
+
+    response = await conversation.send("Como vocês implementaram a Lia?")
+
+    assert "CrewAI" not in response
+    assert "Groq" not in response
+    assert "não forneço detalhes internos" in response

@@ -12,7 +12,7 @@ from banco_agil.models.agent_outputs import (
     TriageTurnResult,
     TurnResult,
 )
-from banco_agil.models.domain import CreditRequestStatus
+from banco_agil.models.domain import CreditRequestStatus, InformationTopic
 from banco_agil.models.errors import BankingError, LLMStructuredOutputError
 from banco_agil.models.state import (
     AgentType,
@@ -24,7 +24,7 @@ from banco_agil.models.state import (
     TransitionIntent,
 )
 from banco_agil.observability import Event, configure_logging, record
-from banco_agil.presentation import CLOSED, OPTIONS, WELCOME
+from banco_agil.presentation import CLOSED, INFORMATION_RESPONSES, OPTIONS, WELCOME
 from banco_agil.repositories.customer_repository import CustomerRepository
 from banco_agil.services.authentication_service import AuthenticationService
 from banco_agil.services.credit_service import CreditService
@@ -37,6 +37,7 @@ class BankingFlow(Flow[SessionState]):
     _tools: SessionTools = PrivateAttr()
     _turn_result: TurnResult | None = PrivateAttr(default=None)
     _rollback_state: SessionState | None = PrivateAttr(default=None)
+    _identity_confirmation: str = PrivateAttr(default="")
 
     def __init__(self, data_dir: Path, exchange: ExchangeService | None = None, **kwargs):
         configure_logging()
@@ -69,6 +70,7 @@ class BankingFlow(Flow[SessionState]):
                 error_code=LLMStructuredOutputError.code,
             )
             return LLMStructuredOutputError.user_message
+        self._identity_confirmation = ""
         self._checkpoint()
         self._turn_result = result
         try:
@@ -80,10 +82,13 @@ class BankingFlow(Flow[SessionState]):
                 setattr(self.state, name, getattr(self._rollback_state, name))
             self.state.last_error_code = exc.code
             record(Event.OPERATION_FAILED, self.state.session_id, error_code=exc.code)
+            if self._identity_confirmation:
+                return f"{self._identity_confirmation}\n\n{exc.user_message}"
             return exc.user_message
         finally:
             self._turn_result = None
             self._rollback_state = None
+            self._identity_confirmation = ""
 
     def _checkpoint(self) -> None:
         self._rollback_state = self.state.model_copy(deep=True)
@@ -100,6 +105,8 @@ class BankingFlow(Flow[SessionState]):
         ):
             transition(self.state, await self._tools.execute("end_conversation"))
             return CLOSED
+        if result.information_topic is not None:
+            return self._service_information(result.information_topic)
         if self.state.current_agent == AgentType.TRIAGE:
             return await self._triage(result)
         return await self._specialist(result)
@@ -159,9 +166,40 @@ class BankingFlow(Flow[SessionState]):
             state.authenticated_customer_cpf = customer.cpf
             state.authenticated = True
             state.authentication_attempts = 0
+            first_name = customer.nome.split(maxsplit=1)[0]
+            self._identity_confirmation = f"Pronto, {first_name}. Confirmei sua identidade."
             record(Event.AUTHENTICATION_SUCCEEDED, state.session_id)
             self._checkpoint()
-        return await self._resume_intent()
+        response = await self._resume_intent()
+        if self._identity_confirmation:
+            return f"{self._identity_confirmation}\n\n{response}"
+        return response
+
+    def _service_information(self, topic: InformationTopic) -> str:
+        response = INFORMATION_RESPONSES[topic]
+        pending_question = self._pending_question()
+        if pending_question:
+            return f"{response}\n\nSe quiser continuar, {pending_question}"
+        return response
+
+    def _pending_question(self) -> str:
+        state = self.state
+        if not state.authenticated:
+            if state.authentication.cpf is not None and state.authentication.birth_date is None:
+                return "qual é sua **data de nascimento**? Use o formato **dia/mês/ano**."
+            if state.authentication.birth_date is not None or state.pending_intent is not None:
+                return "pode me informar seu **CPF**?"
+        if state.current_agent == AgentType.CREDIT:
+            if state.credit.awaiting_requested_limit:
+                return "qual **limite total** você gostaria de ter?"
+            if state.credit.awaiting_interview_confirmation:
+                return "você quer seguir com a **entrevista financeira**?"
+        if state.current_agent == AgentType.INTERVIEW and state.interview is not None:
+            question = self._interview_question()
+            return question[0].lower() + question[1:]
+        if state.current_agent == AgentType.EXCHANGE:
+            return "qual moeda você gostaria de consultar: **USD, EUR ou GBP**?"
+        return ""
 
     async def _resume_intent(self) -> str:
         intent = self.state.pending_intent
