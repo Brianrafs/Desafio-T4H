@@ -19,6 +19,7 @@ def initialize_demo_data(source: Path, destination: Path) -> None:
 
 def reset_demo_data(source: Path, destination: Path) -> None:
     """Restaura somente os CSVs conhecidos, preservando outros arquivos."""
+    validated = [(repository, repository(source).read()) for repository in REPOSITORY_TYPES]
     destination.mkdir(parents=True, exist_ok=True)
-    for repository in REPOSITORY_TYPES:
-        repository(destination).write(repository(source).read())
+    for repository, rows in validated:
+        repository(destination).write(rows)
