@@ -76,27 +76,29 @@ tests/                     Unitários, Flow, tools, integrações e UI
 
 ## Desafios Enfrentados e Como Foram Resolvidos
 
-### 1. Equilibrar autonomia dos agentes e controle determinístico
+### 1. Equilibrar autonomia dos agentes com controle determinístico
 
-A primeira versão concentrava no Flow parte da formulação das mensagens, deixando a conversa rígida. Transferir toda a condução para o LLM, por outro lado, permitiria que uma interpretação probabilística definisse transições e decisões de crédito. A solução foi dar a triagem, crédito, entrevista e câmbio a responsabilidade de interpretar a intenção, extrair informações e formular respostas naturais. O `BankingFlow` conserva o estado, valida as transições e libera as operações conforme a etapa. Services calculam os resultados financeiros; as tools conferem sessão, agente e fase antes de executar uma ação. Assim, a Lia pode adaptar a conversa sem alterar regras críticas ou depender de frases exatas para avançar.
+**Desafio:** mensagens e respostas definidas no Flow deixavam a interação parecida com um chatbot rígido. Dar aos agentes controle irrestrito, porém, tornaria decisões bancárias dependentes do LLM.
 
-### 2. Tornar os outputs do LLM seguros para o fluxo
+**Solução:** os quatro agentes especializados interpretam a intenção, extraem informações e formulam as respostas da Lia. O `BankingFlow` mantém o estado e autoriza as transições; services e tools aplicam as regras de negócio e verificam se cada operação é permitida. Essa divisão dá autonomia à conversa sem delegar ao modelo autenticação, autorização ou decisões financeiras.
 
-Uma resposta do modelo pode chegar incompleta, fora do schema ou incompatível com a etapa da conversa. O contrato JSON enviado à Groq foi separado das instruções ReAct do executor, e os outputs são validados com Pydantic antes de chegar ao Flow. `json_validate_failed`, truncamento e output inválido permitem uma única nova tentativa. Um output incompatível de um especialista gera um erro controlado, sem executar uma tool indevida nem corromper a sessão. Aceites ambíguos não confirmam a entrevista. Os handoffs ficam no Flow, enquanto Lia mantém a mesma identidade e formula o próximo passo a partir do resultado confirmado.
+### 2. Tornar outputs probabilísticos seguros para o fluxo da aplicação
 
-A integração externa de câmbio segue a mesma preocupação com falhas controladas: aceita USD, EUR e GBP, usa timeout de 5 segundos por tentativa e repete uma única vez timeouts, falhas de conexão e HTTP 5xx. HTTP 404 e demais 4xx não são repetidos; um payload inválido resulta em indisponibilidade controlada.
+**Desafio:** uma resposta do LLM pode vir incompleta, inválida ou incompatível com a etapa atual, mesmo quando parece plausível em linguagem natural.
 
-### 3. Preservar o estado diante de falhas e mudanças de contexto
+**Solução:** os retornos estruturados são validados com Pydantic antes de afetar o estado. O provider limita a repetição para outputs inválidos, e as tools verificam sessão, agente e etapa antes de executar ações. Se a interpretação não satisfaz o contrato, o fluxo usa um erro ou resposta controlada em vez de avançar com dados incertos.
 
-Um erro posterior não deve apagar informações já confirmadas nem transformar uma operação parcial em aprovação. Checkpoints preservam os fatos confirmados. O Flow mantém a intenção durante a autenticação, controla os campos aguardados na entrevista e permite mudar de assunto sem perder a consistência da etapa. Quando o usuário interrompe um pedido de aumento para consultar câmbio, a conversa explica a interrupção e pode retomar o atendimento de crédito.
+### 3. Manter consistência de estado diante de falhas e mudanças de contexto
 
-A persistência em CSV exigiu cuidado adicional: dois arquivos não formam uma transação. Cada pedido de aumento começa como `pendente`. Numa aprovação, o limite do cliente é gravado antes do status final; só após as duas escritas a aplicação responde que aprovou. Pedidos pendentes são reconciliados antes de novas operações de crédito ou mudanças de score: o limite original permite retomar a avaliação, o limite solicitado permite concluir a aprovação e um valor incompatível bloqueia a operação. Uma repetição imediata do mesmo pedido recuperado não cria outra linha. Esse mecanismo pressupõe um único escritor e não dá segurança a sessões concorrentes.
+**Desafio:** uma falha após uma informação confirmada ou uma mudança de assunto no meio de uma operação não pode apagar fatos válidos, duplicar ações ou deixar a conversa numa etapa incoerente.
 
-Na entrevista, o novo score é persistido antes da reanálise. Se essa reanálise falhar por erro técnico, o score e a etapa concluída permanecem para retomada; se terminar em rejeição, o atendimento volta à triagem sem oferecer uma segunda entrevista na mesma sessão. Uma recusa anterior à entrevista não consome essa possibilidade. Logs JSON registram eventos e `session_id`, sem CPF, nascimento, renda, despesas, dívida, prompts ou segredos; o console detalhado do CrewAI e as métricas do Streamlit ficam desabilitados. As mensagens ainda são enviadas à Groq para interpretação e permanecem no histórico da sessão da UI, por isso a demonstração usa dados fictícios.
+**Solução:** o `BankingFlow` controla explicitamente as transições e usa checkpoints para preservar o estado confirmado. A entrevista aceita apenas o campo aguardado, e operações interrompidas podem ser retomadas conforme a etapa registrada. Assim, a tentativa atual do modelo não substitui automaticamente os dados já confirmados pela aplicação.
 
-### 4. Garantir precisão nas regras financeiras
+### 4. Garantir precisão e consistência nas regras financeiras
 
-A decisão de crédito precisa ser reproduzível mesmo quando o agente interpreta uma solicitação em linguagem livre. A aprovação de aumento exige que o valor solicitado seja maior que o limite atual e esteja dentro do teto da faixa de score. As faixas são validadas na inicialização para cobrir continuamente scores de 0 a 1000, sem lacunas. Os cálculos monetários usam `Decimal`, e score, limites e decisões ficam nos services e repositories, fora do prompt e da decisão do LLM. Os testes exercitam aprovação, rejeição, entrevista, reanálise e falhas de escrita para verificar essas garantias.
+**Desafio:** limites, scores e valores monetários exigem resultados reproduzíveis; não podem depender da interpretação probabilística do modelo nem de arredondamentos de ponto flutuante.
+
+**Solução:** os services calculam score e elegibilidade de crédito com regras determinísticas, e valores monetários usam `Decimal`. Os repositories validam as faixas de score na inicialização. O agente comunica o resultado confirmado, mas não calcula nem altera a decisão financeira.
 
 ## Escolhas Técnicas e Justificativas
 
