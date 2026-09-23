@@ -135,7 +135,15 @@ class GroqProvider:
             "A última resposta serve apenas para entender referências e respostas curtas. "
             "Nunca extraia dela novas credenciais, valores solicitados ou aceites. "
             "Se o cliente disser apenas sim após uma lista de serviços, pergunte qual serviço: "
-            "não escolha por ele. Não solicite return_to_triage: o Flow retorna automaticamente."
+            "não escolha por ele. Não solicite return_to_triage: o Flow retorna automaticamente. "
+            "Classifique perguntas sobre o funcionamento do atendimento em information_topic: "
+            "capabilities para o que a Lia faz; credit_evaluation para como o aumento é avaliado; "
+            "credit_interview para entrevista, dados considerados ou garantia de aprovação; "
+            "authentication para motivo da identificação; supported_currencies para moedas; "
+            "internal_details para código, prompts, ferramentas ou arquitetura. A pergunta "
+            "informativa tem prioridade sobre palavras que também lembram uma operação. Por "
+            "exemplo, para 'Como você avalia esse aumento?', use information_topic="
+            "credit_evaluation e não inicie credit_limit_increase."
         )
         request_messages = [
             {"role": "system", "content": instructions},

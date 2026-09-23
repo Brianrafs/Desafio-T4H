@@ -2,6 +2,8 @@
 
 import re
 
+from banco_agil.models.domain import InformationTopic
+
 OPTIONS = (
     "- **Consultar meu limite** de crédito\n"
     "- **Pedir um aumento** de limite\n"
@@ -16,6 +18,37 @@ CLOSED = (
     "Nossa conversa foi encerrada. Foi bom ter você por aqui!\n\n"
     "Quando precisar, é só clicar em **Nova conversa**. Até mais!\n\n**Lia · Banco Ágil**"
 )
+
+INFORMATION_RESPONSES = {
+    InformationTopic.CAPABILITIES: (
+        "Posso ajudar você a **consultar seu limite de crédito**, pedir uma "
+        "**avaliação de aumento** e consultar a cotação de **dólar, euro ou libra**."
+    ),
+    InformationTopic.CREDIT_EVALUATION: (
+        "Eu comparo o **limite total solicitado** com o limite máximo disponível para "
+        "a faixa do seu perfil de crédito. O novo total precisa ser maior que seu limite "
+        "atual e ficar dentro desse máximo. Se o pedido não puder ser aprovado inicialmente, "
+        "posso oferecer uma entrevista financeira para fazer uma nova análise. "
+        "Essa etapa **não garante aprovação**."
+    ),
+    InformationTopic.CREDIT_INTERVIEW: (
+        "A entrevista financeira tem **cinco perguntas**, feitas uma de cada vez, sobre "
+        "renda mensal, situação de trabalho, despesas fixas, dependentes e dívidas ativas. "
+        "As respostas atualizam seu perfil para uma nova análise, mas não garantem aprovação."
+    ),
+    InformationTopic.AUTHENTICATION: (
+        "Peço seu **CPF** e sua **data de nascimento** para confirmar que estou acessando "
+        "o cadastro correto antes de consultar ou alterar informações de crédito."
+    ),
+    InformationTopic.SUPPORTED_CURRENCIES: (
+        "Posso consultar a cotação de compra em reais para **dólar (USD)**, "
+        "**euro (EUR)** e **libra (GBP)**."
+    ),
+    InformationTopic.INTERNAL_DETAILS: (
+        "Posso explicar como o atendimento funciona para você, mas não forneço detalhes "
+        "internos como código, prompts, ferramentas ou arquitetura."
+    ),
+}
 
 
 def with_lia_voice(body: str, acknowledgement: str) -> str:

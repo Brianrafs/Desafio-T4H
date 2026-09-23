@@ -147,3 +147,24 @@ async def test_truncated_generation_retries_within_same_budget(data_dir):
     ).interpret("oi", SessionState())
     assert result.message == ""
     assert len(calls) == 2
+
+
+async def test_prompt_prioritizes_service_question_over_operational_words(data_dir):
+    bodies = []
+
+    def respond(request):
+        bodies.append(json.loads(request.content))
+        content = {"information_topic": "credit_evaluation"}
+        return httpx.Response(
+            200, json={"choices": [{"message": {"content": json.dumps(content)}}]}
+        )
+
+    provider = GroqProvider(
+        "test", "test", BankingFlow(data_dir).tools, httpx.MockTransport(respond)
+    )
+    result = await provider.interpret("Como você avalia esse aumento?", SessionState())
+
+    system_prompt = bodies[0]["messages"][0]["content"]
+    assert result.information_topic == "credit_evaluation"
+    assert "pergunta informativa tem prioridade" in system_prompt
+    assert "Como você avalia esse aumento?" in system_prompt

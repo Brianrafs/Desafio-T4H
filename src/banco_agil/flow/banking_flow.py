@@ -12,7 +12,7 @@ from banco_agil.models.agent_outputs import (
     TriageTurnResult,
     TurnResult,
 )
-from banco_agil.models.domain import CreditRequestStatus
+from banco_agil.models.domain import CreditRequestStatus, InformationTopic
 from banco_agil.models.errors import BankingError, LLMStructuredOutputError
 from banco_agil.models.state import (
     AgentType,
@@ -24,7 +24,7 @@ from banco_agil.models.state import (
     TransitionIntent,
 )
 from banco_agil.observability import Event, configure_logging, record
-from banco_agil.presentation import CLOSED, OPTIONS, WELCOME
+from banco_agil.presentation import CLOSED, INFORMATION_RESPONSES, OPTIONS, WELCOME
 from banco_agil.repositories.customer_repository import CustomerRepository
 from banco_agil.services.authentication_service import AuthenticationService
 from banco_agil.services.credit_service import CreditService
@@ -100,6 +100,8 @@ class BankingFlow(Flow[SessionState]):
         ):
             transition(self.state, await self._tools.execute("end_conversation"))
             return CLOSED
+        if result.information_topic is not None:
+            return self._service_information(result.information_topic)
         if self.state.current_agent == AgentType.TRIAGE:
             return await self._triage(result)
         return await self._specialist(result)
@@ -162,6 +164,32 @@ class BankingFlow(Flow[SessionState]):
             record(Event.AUTHENTICATION_SUCCEEDED, state.session_id)
             self._checkpoint()
         return await self._resume_intent()
+
+    def _service_information(self, topic: InformationTopic) -> str:
+        response = INFORMATION_RESPONSES[topic]
+        pending_question = self._pending_question()
+        if pending_question:
+            return f"{response}\n\nSe quiser continuar, {pending_question}"
+        return response
+
+    def _pending_question(self) -> str:
+        state = self.state
+        if not state.authenticated and state.pending_intent is not None:
+            if state.authentication.cpf is None:
+                return "pode me informar seu **CPF**?"
+            if state.authentication.birth_date is None:
+                return "qual é sua **data de nascimento**? Use o formato **dia/mês/ano**."
+        if state.current_agent == AgentType.CREDIT:
+            if state.credit.awaiting_requested_limit:
+                return "qual **limite total** você gostaria de ter?"
+            if state.credit.awaiting_interview_confirmation:
+                return "você quer seguir com a **entrevista financeira**?"
+        if state.current_agent == AgentType.INTERVIEW and state.interview is not None:
+            question = self._interview_question()
+            return question[0].lower() + question[1:]
+        if state.current_agent == AgentType.EXCHANGE:
+            return "qual moeda você gostaria de consultar: **USD, EUR ou GBP**?"
+        return ""
 
     async def _resume_intent(self) -> str:
         intent = self.state.pending_intent
