@@ -12,3 +12,4 @@ def initialize_demo_data(source: Path, destination: Path) -> None:
         target = repository(destination)
         if not target.path.exists():
             target.write(repository(source).read())
+        target.read()

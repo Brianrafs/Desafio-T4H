@@ -11,8 +11,10 @@ class ScoreRangeRepository(CsvRepository[ScoreRange]):
 
     def read(self) -> list[ScoreRange]:
         ranges = sorted(super().read(), key=lambda row: row.score_min)
+        if not ranges or ranges[0].score_min != 0 or ranges[-1].score_max != 1000:
+            raise RepositoryError()
         if any(
-            left.score_max >= right.score_min
+            left.score_max + 1 != right.score_min
             for left, right in zip(ranges, ranges[1:], strict=False)
         ):
             raise RepositoryError()
