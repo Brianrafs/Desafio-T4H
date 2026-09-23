@@ -344,8 +344,15 @@ class BankingFlow(Flow[SessionState]):
         timestamp = (
             f"\n\nAtualizada em {quote.quoted_at:%d/%m/%Y às %H:%M} UTC." if quote.quoted_at else ""
         )
-        return self._complete_operation(
+        interrupted_credit = self.state.credit.awaiting_requested_limit
+        body = (
             f"**Cotação de {quote.currency}**\n\n"
             f"**1 {quote.currency} = R$ {quote.bid:.4f}**\n\n"
             f"Valor de compra em reais.{timestamp}"
         )
+        if interrupted_credit:
+            body += (
+                "\n\nSeu pedido de aumento ainda não foi enviado. "
+                "Quando quiser, podemos iniciar uma nova solicitação."
+            )
+        return self._complete_operation(body)

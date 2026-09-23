@@ -56,3 +56,20 @@ async def test_exchange_failure_preserves_state(data_dir):
     assert flow.state.current_agent == "credit"
     assert flow.state.authenticated
     assert flow.state.last_error_code == "exchange_unavailable"
+
+
+async def test_switching_to_exchange_explains_incomplete_credit_request(data_dir):
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(200, json={"EURBRL": {"bid": "6"}})
+    )
+    flow = BankingFlow(data_dir, ExchangeService(transport=transport))
+    await authenticate(flow, "credit_limit_increase")
+    assert flow.state.credit.awaiting_requested_limit
+
+    reply = await flow.process(
+        CreditTurnResult(transition_request="go_to_exchange", currency="EUR")
+    )
+
+    assert "pedido de aumento ainda não foi enviado" in reply
+    assert not flow.state.credit.awaiting_requested_limit
+    assert flow.state.current_agent == "triage"
