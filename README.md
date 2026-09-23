@@ -16,6 +16,8 @@ A assistente se chama **Lia** em todas as etapas. Suas mensagens usam Markdown, 
 - O teste automatizado da UI usa integrações simuladas. O teste manual real cobriu os turnos após autenticação local; a coleta de CPF e nascimento pela Groq não foi incluída nesse cenário.
 - Não há banco transacional, painel administrativo, tracing distribuído ou autenticação de produção.
 
+![Tela inicial do atendimento do Banco Ágil](docs/assets/banco-agil-home.png)
+
 ## Arquitetura do Sistema
 
 ```mermaid
