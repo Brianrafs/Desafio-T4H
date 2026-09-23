@@ -13,6 +13,7 @@ from banco_agil.repositories.bootstrap import reset_demo_data
 st.set_page_config(page_title="Banco Ágil | Atendimento", page_icon=":material/account_balance:")
 st.title("Banco Ágil")
 st.caption("Converse com a Lia · Seu atendimento, em uma conversa.")
+st.caption("Demonstração com dados fictícios. As mensagens do chat são processadas pela Groq.")
 
 settings = Settings()
 
@@ -38,6 +39,10 @@ configured = bool(settings.groq_api_key.get_secret_value())
 
 with st.sidebar:
     st.subheader("Lia · Banco Ágil")
+    if conversation.flow.state.authenticated:
+        st.success("Identidade confirmada")
+    else:
+        st.caption("Identidade ainda não confirmada")
     st.markdown(
         "Estou aqui para ajudar com:\n\n"
         "- **Seu limite de crédito**\n- **Pedidos de aumento**\n- **Cotações em reais**"

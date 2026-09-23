@@ -198,3 +198,26 @@ def test_new_conversation_requires_confirmation(data_dir, monkeypatch):
     app.button(key="confirm_new_conversation").click().run()
     assert not app.session_state.conversation.flow.state.authenticated
     assert app.session_state.messages == [{"role": "assistant", "content": WELCOME}]
+
+
+def test_privacy_notice_is_visible_before_chat(tmp_path, monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "")
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    app = AppTest.from_file(str(APP), default_timeout=20).run()
+    rendered = " ".join(element.value for element in app.caption)
+    assert "dados fictícios" in rendered
+    assert "Groq" in rendered
+
+
+def test_authenticated_status_does_not_expose_cpf(data_dir, monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "test")
+    monkeypatch.setenv("DATA_DIR", str(data_dir))
+    flow = BankingFlow(data_dir)
+    flow.state.authenticated = True
+    flow.state.authenticated_customer_cpf = "00000000001"
+    app = AppTest.from_file(str(APP), default_timeout=20)
+    app.session_state["conversation"] = Conversation(flow, ScriptedProvider([]))
+    app.run()
+    rendered = " ".join(element.value for element in [*app.caption, *app.success])
+    assert "Identidade confirmada" in rendered
+    assert "00000000001" not in rendered
