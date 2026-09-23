@@ -197,10 +197,6 @@ Com Ana e dados iniciais:
 - “Encerrar”, “sair”, “fim” e o botão **Encerrar atendimento** funcionam mesmo se a Groq estiver indisponível. Outras formulações são interpretadas pelo agente.
 - Três combinações incorretas de CPF e nascimento encerram a sessão. Dados ainda incompletos não contam como uma tentativa de autenticação.
 
-### Desenvolvimento
-
-Seguir [AGENTS.md](AGENTS.md) e o [plano de implementação](docs/plans/implementation.md). Cada funcionalidade concluída e validada recebe um commit atômico em Conventional Commits, com uma ou duas frases curtas em português. Testes relacionados acompanham a implementação.
-
 ### Referências
 
 - [Especificação aprovada](docs/plans/2026-09-22-banco-agil-design.md)
