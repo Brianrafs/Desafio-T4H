@@ -9,15 +9,12 @@ from banco_agil.models.domain import (
     Money,
     SupportedCurrency,
 )
+from banco_agil.models.responses import UserTone
 from banco_agil.models.state import IntentType, TransitionIntent
 
 
 class TurnResult(Model):
-    message: str = Field(
-        default="",
-        max_length=220,
-        description="Frase breve de acolhimento da Lia, sem fatos financeiros, dados ou perguntas.",
-    )
+    user_tone: UserTone = UserTone.NEUTRAL
     end_requested: bool = False
     information_topic: InformationTopic | None = None
 

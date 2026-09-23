@@ -1,8 +1,26 @@
+from enum import StrEnum
+
 from banco_agil.models.domain import Model
+from banco_agil.models.responses import CriticalFailureCode
+
+
+class ErrorCode(StrEnum):
+    BANKING_ERROR = "banking_error"
+    UNAUTHORIZED = "unauthorized"
+    INVALID_LIMIT = "invalid_limit"
+    SCORE_RANGE_NOT_FOUND = "score_range_not_found"
+    REPOSITORY_ERROR = "repository_error"
+    EXCHANGE_UNAVAILABLE = "exchange_unavailable"
+    INVALID_CURRENCY = "invalid_currency"
+    LLM_UNAVAILABLE = "llm_unavailable"
+    INVALID_LLM_OUTPUT = "invalid_llm_output"
+    LLM_RATE_LIMITED = "llm_rate_limited"
+    INVALID_INTERNAL_STATE = "invalid_internal_state"
 
 
 class BankingError(Exception):
-    code = "banking_error"
+    critical_failure_code: CriticalFailureCode | None = None
+    code = ErrorCode.BANKING_ERROR
     user_message = (
         "Não consegui concluir esse pedido agora.\n\nPodemos tentar novamente em instantes?"
     )
@@ -14,7 +32,7 @@ class DomainError(BankingError):
 
 
 class AuthorizationError(DomainError):
-    code = "unauthorized"
+    code = ErrorCode.UNAUTHORIZED
     user_message = (
         "Ainda precisamos concluir a etapa atual para seguir com esse pedido.\n\n"
         "Posso ajudar você a continuar ou **encerrar** a conversa, se preferir."
@@ -22,7 +40,7 @@ class AuthorizationError(DomainError):
 
 
 class InvalidCreditLimitError(DomainError):
-    code = "invalid_limit"
+    code = ErrorCode.INVALID_LIMIT
     user_message = (
         "Vamos ajustar o valor? O limite precisa ser **maior que zero**, "
         "com até **duas casas decimais**.\n\nQual limite total você gostaria de solicitar?"
@@ -30,7 +48,8 @@ class InvalidCreditLimitError(DomainError):
 
 
 class ScoreRangeNotFoundError(DomainError):
-    code = "score_range_not_found"
+    critical_failure_code = CriticalFailureCode.INVALID_INTERNAL_STATE
+    code = ErrorCode.SCORE_RANGE_NOT_FOUND
     user_message = (
         "A análise de crédito está **indisponível** no momento.\n\n"
         "Seu atendimento continua aberto. Podemos tentar novamente em instantes."
@@ -42,7 +61,8 @@ class InfrastructureError(BankingError):
 
 
 class RepositoryError(InfrastructureError):
-    code = "repository_error"
+    critical_failure_code = CriticalFailureCode.PERSISTENCE_FAILURE
+    code = ErrorCode.REPOSITORY_ERROR
     user_message = (
         "Tive uma dificuldade para acessar os dados agora.\n\n"
         "Podemos **tentar novamente**? Vou manter a conversa nesta etapa."
@@ -54,7 +74,7 @@ class ExternalServiceError(BankingError):
 
 
 class ExchangeServiceUnavailableError(ExternalServiceError):
-    code = "exchange_unavailable"
+    code = ErrorCode.EXCHANGE_UNAVAILABLE
     user_message = (
         "A cotação está **indisponível** neste momento.\n\n"
         "Você pode tentar outra vez em instantes ou me pedir uma **consulta de limite**."
@@ -62,7 +82,7 @@ class ExchangeServiceUnavailableError(ExternalServiceError):
 
 
 class InvalidCurrencyError(DomainError):
-    code = "invalid_currency"
+    code = ErrorCode.INVALID_CURRENCY
     user_message = (
         "Por enquanto, consigo consultar estas moedas:\n\n"
         "- **Dólar** — USD\n- **Euro** — EUR\n- **Libra** — GBP\n\nQual delas você prefere?"
@@ -70,7 +90,7 @@ class InvalidCurrencyError(DomainError):
 
 
 class LLMError(BankingError):
-    code = "llm_unavailable"
+    code = ErrorCode.LLM_UNAVAILABLE
     user_message = (
         "Tive uma dificuldade para responder agora, mas **sua conversa continua aqui**.\n\n"
         "Pode tentar novamente em instantes? Se preferir, você também pode **encerrar**."
@@ -78,7 +98,7 @@ class LLMError(BankingError):
 
 
 class LLMStructuredOutputError(LLMError):
-    code = "invalid_llm_output"
+    code = ErrorCode.INVALID_LLM_OUTPUT
     user_message = (
         "Desculpe, não consegui interpretar sua mensagem desta vez.\n\n"
         "Pode me contar de outro jeito? **Seguimos de onde paramos.**"
@@ -86,7 +106,7 @@ class LLMStructuredOutputError(LLMError):
 
 
 class LLMRateLimitError(LLMError):
-    code = "llm_rate_limited"
+    code = ErrorCode.LLM_RATE_LIMITED
     user_message = (
         "Preciso de uma pequena pausa antes de responder de novo.\n\n"
         "**Aguarde um minuto e tente novamente**, por favor. "

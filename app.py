@@ -7,7 +7,6 @@ from banco_agil.bootstrap import create_conversation
 from banco_agil.config import Settings
 from banco_agil.models.errors import BankingError
 from banco_agil.models.state import AgentType, ConversationStatus
-from banco_agil.presentation import WELCOME
 from banco_agil.repositories.bootstrap import reset_demo_data
 
 
@@ -34,15 +33,13 @@ if "conversation" not in st.session_state:
         st.error("Não foi possível iniciar o atendimento. Verifique os dados e tente novamente.")
         st.stop()
 
-st.session_state.setdefault(
-    "messages",
-    [
+if "messages" not in st.session_state:
+    st.session_state.messages = [
         {
             "role": "assistant",
-            "content": WELCOME,
+            "content": asyncio.run(st.session_state.conversation.start()),
         }
-    ],
-)
+    ]
 conversation = st.session_state.conversation
 finished = conversation.flow.state.status == ConversationStatus.FINISHED
 configured = bool(settings.groq_api_key.get_secret_value())

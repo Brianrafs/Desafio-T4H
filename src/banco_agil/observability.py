@@ -1,6 +1,12 @@
 import json
 import logging
 from enum import StrEnum
+from uuid import UUID
+
+from banco_agil.models.domain import CreditRequestStatus
+from banco_agil.models.errors import ErrorCode
+from banco_agil.models.responses import FallbackReason
+from banco_agil.models.state import AgentType
 
 
 class Event(StrEnum):
@@ -16,6 +22,10 @@ class Event(StrEnum):
     EXTERNAL_API_FAILED = "external_api_failed"
     OPERATION_FAILED = "operation_failed"
     CONVERSATION_FINISHED = "conversation_finished"
+    RESPONSE_COMPOSITION_STARTED = "response_composition_started"
+    RESPONSE_COMPOSITION_SUCCEEDED = "response_composition_succeeded"
+    RESPONSE_COMPOSITION_FALLBACK = "response_composition_fallback"
+    RESPONSE_POLICY_REJECTED = "response_policy_rejected"
 
 
 def configure_logging() -> None:
@@ -33,10 +43,25 @@ def configure_logging() -> None:
         logger.addHandler(handler)
 
 
-def record(event: Event, session_id: str, *, agent=None, status=None, error_code=None) -> None:
+def record(
+    event: Event,
+    session_id: str,
+    *,
+    agent: AgentType | None = None,
+    status: CreditRequestStatus | None = None,
+    error_code: ErrorCode | None = None,
+    reason: FallbackReason | None = None,
+) -> None:
     """Contrato fechado: não aceita mensagem, CPF, valores ou objetos arbitrários."""
-    payload = {"event": event.value, "session_id": session_id}
-    for name, value in (("agent", agent), ("status", status), ("error_code", error_code)):
+    if not isinstance(session_id, str):
+        raise TypeError("Identificador de sessão inválido")
+    payload = {"event": Event(event).value, "session_id": str(UUID(session_id))}
+    for name, value, enum in (
+        ("agent", agent, AgentType),
+        ("status", status, CreditRequestStatus),
+        ("error_code", error_code, ErrorCode),
+        ("reason", reason, FallbackReason),
+    ):
         if value is not None:
-            payload[name] = value
+            payload[name] = enum(value).value
     logging.getLogger("banco_agil").info(json.dumps(payload, ensure_ascii=False))

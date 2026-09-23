@@ -1,6 +1,9 @@
 import httpx
 import pytest
 
+from banco_agil.conversation import Conversation
+from banco_agil.flow.banking_flow import BankingFlow
+from banco_agil.models.agent_outputs import TriageTurnResult
 from banco_agil.models.errors import ExchangeServiceUnavailableError, InvalidCurrencyError
 from banco_agil.services.exchange_service import ExchangeService
 
@@ -60,3 +63,39 @@ async def test_invalid_payload(body):
 async def test_unsupported_currency():
     with pytest.raises(InvalidCurrencyError):
         await ExchangeService().get_exchange_rate("BTC")
+
+
+async def test_exchange_quote_fallback_resolves_private_values_after_composition(data_dir):
+    class QuoteProvider:
+        async def interpret(self, message, state, *, previous_summary=None):
+            return TriageTurnResult(
+                cpf="00000000001",
+                birth_date="1990-01-15",
+                detected_intent="exchange_rate",
+                currency="USD",
+            )
+
+        async def compose(self, brief, *, previous_summary=None):
+            serialized = brief.model_dump_json()
+            assert "5.0000" not in serialized
+            assert "15/06/2025" not in serialized
+            assert "1750000000" not in serialized
+            return None
+
+    exchange = ExchangeService(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                200, json={"USDBRL": {"bid": "5", "timestamp": "1750000000"}}
+            )
+        )
+    )
+    conversation = Conversation(BankingFlow(data_dir, exchange), QuoteProvider())
+
+    reply = await conversation.send("Quanto está o dólar?")
+
+    assert "1 USD = R$ 5.0000" in reply
+    assert "15/06/2025 às 15:06 UTC" in reply
+    assert conversation.last_summary.events == (
+        "authentication_succeeded",
+        "exchange_quote_found",
+    )

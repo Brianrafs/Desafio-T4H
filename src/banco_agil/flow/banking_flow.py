@@ -13,7 +13,21 @@ from banco_agil.models.agent_outputs import (
     TurnResult,
 )
 from banco_agil.models.domain import CreditRequestStatus, InformationTopic
-from banco_agil.models.errors import BankingError, LLMStructuredOutputError
+from banco_agil.models.errors import (
+    BankingError,
+    ExchangeServiceUnavailableError,
+    InvalidCreditLimitError,
+    InvalidCurrencyError,
+    LLMStructuredOutputError,
+)
+from banco_agil.models.responses import (
+    CriticalFailure,
+    CriticalFailureCode,
+    FlowOutcome,
+    NextStep,
+    OutcomeDirective,
+    ResponseEvent,
+)
 from banco_agil.models.state import (
     AgentType,
     AuthenticationContext,
@@ -24,7 +38,6 @@ from banco_agil.models.state import (
     TransitionIntent,
 )
 from banco_agil.observability import Event, configure_logging, record
-from banco_agil.presentation import CLOSED, INFORMATION_RESPONSES, OPTIONS, WELCOME
 from banco_agil.repositories.customer_repository import CustomerRepository
 from banco_agil.services.authentication_service import AuthenticationService
 from banco_agil.services.credit_service import CreditService
@@ -37,7 +50,6 @@ class BankingFlow(Flow[SessionState]):
     _tools: SessionTools = PrivateAttr()
     _turn_result: TurnResult | None = PrivateAttr(default=None)
     _rollback_state: SessionState | None = PrivateAttr(default=None)
-    _identity_confirmation: str = PrivateAttr(default="")
 
     def __init__(self, data_dir: Path, exchange: ExchangeService | None = None, **kwargs):
         configure_logging()
@@ -59,9 +71,9 @@ class BankingFlow(Flow[SessionState]):
     def tools(self) -> SessionTools:
         return self._tools
 
-    async def process(self, result: TurnResult) -> str:
+    async def process(self, result: TurnResult) -> FlowOutcome | CriticalFailure:
         if self.state.status == ConversationStatus.FINISHED:
-            return CLOSED
+            return CriticalFailure(code=CriticalFailureCode.SESSION_FINISHED)
         if not isinstance(result, OUTPUT_TYPES[self.state.current_agent]):
             self.state.last_error_code = LLMStructuredOutputError.code
             record(
@@ -69,32 +81,33 @@ class BankingFlow(Flow[SessionState]):
                 self.state.session_id,
                 error_code=LLMStructuredOutputError.code,
             )
-            return LLMStructuredOutputError.user_message
-        self._identity_confirmation = ""
+            return CriticalFailure(code=CriticalFailureCode.INVALID_LLM_OUTPUT)
         self._checkpoint()
         self._turn_result = result
         try:
-            response = await self.kickoff_async()
             self.state.last_error_code = None
-            return response
+            return await self.kickoff_async()
         except BankingError as exc:
             for name in SessionState.model_fields:
                 setattr(self.state, name, getattr(self._rollback_state, name))
             self.state.last_error_code = exc.code
             record(Event.OPERATION_FAILED, self.state.session_id, error_code=exc.code)
-            if self._identity_confirmation:
-                return f"{self._identity_confirmation}\n\n{exc.user_message}"
-            return exc.user_message
+            if isinstance(exc, ExchangeServiceUnavailableError):
+                return CriticalFailure(code=CriticalFailureCode.EXTERNAL_SERVICE_UNAVAILABLE)
+            if exc.critical_failure_code is not None:
+                return CriticalFailure(code=exc.critical_failure_code)
+            if isinstance(exc, LLMStructuredOutputError):
+                return CriticalFailure(code=CriticalFailureCode.INVALID_LLM_OUTPUT)
+            return CriticalFailure(code=CriticalFailureCode.INVALID_INTERNAL_STATE)
         finally:
             self._turn_result = None
             self._rollback_state = None
-            self._identity_confirmation = ""
 
     def _checkpoint(self) -> None:
         self._rollback_state = self.state.model_copy(deep=True)
 
     @start()
-    async def dispatch(self) -> str:
+    async def dispatch(self) -> FlowOutcome | CriticalFailure:
         result = self._turn_result
         if result is None:
             raise LLMStructuredOutputError()
@@ -104,15 +117,20 @@ class BankingFlow(Flow[SessionState]):
             or getattr(result, "detected_intent", None) == IntentType.END_CONVERSATION
         ):
             transition(self.state, await self._tools.execute("end_conversation"))
-            return CLOSED
+            return self._outcome(
+                self.state.current_agent,
+                ResponseEvent.CONVERSATION_CLOSED,
+                next_step=NextStep.FINISHED,
+            )
         if result.information_topic is not None:
             return self._service_information(result.information_topic)
         if self.state.current_agent == AgentType.TRIAGE:
             return await self._triage(result)
         return await self._specialist(result)
 
-    async def _triage(self, result: TriageTurnResult) -> str:
+    async def _triage(self, result: TriageTurnResult) -> FlowOutcome | CriticalFailure:
         state = self.state
+        prefix = None
         if result.detected_intent not in (None, IntentType.UNKNOWN):
             state.pending_intent = result.detected_intent
         if result.requested_limit is not None:
@@ -129,16 +147,22 @@ class BankingFlow(Flow[SessionState]):
             if result.birth_date is not None:
                 state.authentication.birth_date = result.birth_date
             if state.authentication.cpf is None:
-                if state.pending_intent is None:
-                    return WELCOME
-                return (
-                    "Para cuidar do seu pedido, preciso primeiro confirmar sua identidade.\n\n"
-                    "Pode me informar seu **CPF**?"
+                if state.pending_intent is None and state.authentication.birth_date is None:
+                    return self._outcome(
+                        AgentType.TRIAGE, ResponseEvent.WELCOME, expected_questions=1
+                    )
+                return self._outcome(
+                    AgentType.TRIAGE,
+                    ResponseEvent.REQUEST_CPF,
+                    next_step=NextStep.AWAIT_CPF,
+                    expected_questions=1,
                 )
             if state.authentication.birth_date is None:
-                return (
-                    "Agora, me diga sua **data de nascimento**, por favor.\n\n"
-                    "Pode escrever no formato **dia/mês/ano**."
+                return self._outcome(
+                    AgentType.TRIAGE,
+                    ResponseEvent.REQUEST_BIRTH_DATE,
+                    next_step=NextStep.AWAIT_BIRTH_DATE,
+                    expected_questions=1,
                 )
             customer = await self._tools.execute(
                 "authenticate_customer",
@@ -151,75 +175,119 @@ class BankingFlow(Flow[SessionState]):
                 state.authentication_attempts += 1
                 if state.authentication_attempts >= 3:
                     transition(state, TransitionIntent.END_CONVERSATION)
-                    return (
-                        "Não consegui confirmar seus dados nas **três tentativas**. "
-                        "Por isso, preciso encerrar este atendimento.\n\n"
-                        "Confira seu CPF e nascimento antes de iniciar uma **Nova conversa**. "
-                        "Estarei por aqui para ajudar.\n\n**Lia · Banco Ágil**"
-                    )
-                remaining = 3 - state.authentication_attempts
-                return (
-                    "Os dados não coincidiram com o cadastro. Vamos conferir juntos?\n\n"
-                    "Envie novamente seu **CPF** e sua **data de nascimento**.\n\n"
-                    f"Tentativas restantes: **{remaining}**."
+                    return CriticalFailure(code=CriticalFailureCode.AUTH_ATTEMPTS_EXHAUSTED)
+                return FlowOutcome(
+                    directives=(
+                        OutcomeDirective(
+                            event=ResponseEvent.AUTHENTICATION_RETRY,
+                            public_context={
+                                "remaining_attempts": 3 - state.authentication_attempts
+                            },
+                        ),
+                        OutcomeDirective(event=ResponseEvent.RESUME_PENDING_STEP),
+                    ),
+                    specialist=AgentType.TRIAGE,
+                    next_step=NextStep.AWAIT_CPF,
+                    expected_questions=1,
                 )
             state.authenticated_customer_cpf = customer.cpf
             state.authenticated = True
             state.authentication_attempts = 0
-            first_name = customer.nome.split(maxsplit=1)[0]
-            self._identity_confirmation = f"Pronto, {first_name}. Confirmei sua identidade."
+            prefix = self._outcome(
+                AgentType.TRIAGE,
+                ResponseEvent.AUTHENTICATION_SUCCEEDED,
+                protected_values={"customer_first_name": customer.nome.split(maxsplit=1)[0]},
+            )
             record(Event.AUTHENTICATION_SUCCEEDED, state.session_id)
             self._checkpoint()
-        response = await self._resume_intent()
-        if self._identity_confirmation:
-            return f"{self._identity_confirmation}\n\n{response}"
-        return response
+        return await self._resume_intent(prefix)
 
-    def _service_information(self, topic: InformationTopic) -> str:
-        response = INFORMATION_RESPONSES[topic]
-        pending_question = self._pending_question()
-        if pending_question:
-            return f"{response}\n\nSe quiser continuar, {pending_question}"
-        return response
+    def _service_information(self, topic: InformationTopic) -> FlowOutcome:
+        # O tópico é a única informação pública; fatos e texto ficam no catálogo.
+        topic = InformationTopic(topic)
+        next_step = self._pending_question()
+        directives = [
+            OutcomeDirective(
+                event=ResponseEvent.SERVICE_INFORMATION,
+                public_context={"topic": topic.value},
+            )
+        ]
+        if next_step != NextStep.IDLE:
+            context = {}
+            if next_step == NextStep.AWAIT_INTERVIEW_FIELD:
+                context = {"field": self.state.interview.next_missing_field()}
+            directives.append(
+                OutcomeDirective(event=ResponseEvent.RESUME_PENDING_STEP, public_context=context)
+            )
+        return FlowOutcome(
+            directives=tuple(directives),
+            specialist=self.state.current_agent,
+            next_step=next_step,
+            expected_questions=int(next_step != NextStep.IDLE),
+        )
 
-    def _pending_question(self) -> str:
+    def _pending_question(self) -> NextStep:
         state = self.state
         if not state.authenticated:
             if state.authentication.cpf is not None and state.authentication.birth_date is None:
-                return "qual é sua **data de nascimento**? Use o formato **dia/mês/ano**."
+                return NextStep.AWAIT_BIRTH_DATE
             if state.authentication.birth_date is not None or state.pending_intent is not None:
-                return "pode me informar seu **CPF**?"
+                return NextStep.AWAIT_CPF
         if state.current_agent == AgentType.CREDIT:
             if state.credit.awaiting_requested_limit:
-                return "qual **limite total** você gostaria de ter?"
+                return NextStep.AWAIT_REQUESTED_LIMIT
             if state.credit.awaiting_interview_confirmation:
-                return "você quer seguir com a **entrevista financeira**?"
+                return NextStep.AWAIT_INTERVIEW_CONFIRMATION
         if state.current_agent == AgentType.INTERVIEW and state.interview is not None:
-            question = self._interview_question()
-            return question[0].lower() + question[1:]
+            if state.interview.next_missing_field() is not None:
+                return NextStep.AWAIT_INTERVIEW_FIELD
         if state.current_agent == AgentType.EXCHANGE:
-            return "qual moeda você gostaria de consultar: **USD, EUR ou GBP**?"
-        return ""
+            return NextStep.AWAIT_CURRENCY
+        return NextStep.IDLE
 
-    async def _resume_intent(self) -> str:
+    async def _resume_intent(
+        self, prefix: FlowOutcome | None = None
+    ) -> FlowOutcome | CriticalFailure:
         intent = self.state.pending_intent
         if intent in (IntentType.CREDIT_LIMIT_QUERY, IntentType.CREDIT_LIMIT_INCREASE):
             transition(self.state, TransitionIntent.GO_TO_CREDIT)
             self.state.pending_intent = None
-            return await self._credit(
+            response = await self._credit(
                 CreditTurnResult(
                     detected_intent=intent, requested_limit=self.state.credit.requested_limit
                 )
             )
-        if intent == IntentType.EXCHANGE_RATE:
+        elif intent == IntentType.EXCHANGE_RATE:
             transition(self.state, TransitionIntent.GO_TO_EXCHANGE)
             self.state.pending_intent = None
             currency = self.state.pending_currency
             self.state.pending_currency = None
-            return await self._exchange(ExchangeTurnResult(currency=currency))
-        return "Estou aqui com você. Qual destas opções você prefere?\n\n" + OPTIONS
+            response = await self._exchange(ExchangeTurnResult(currency=currency))
+        else:
+            response = self._outcome(
+                AgentType.TRIAGE, ResponseEvent.SHOW_OPTIONS, expected_questions=1
+            )
+        if prefix is None or isinstance(response, CriticalFailure):
+            return response
+        protected_values = dict(prefix.protected_values)
+        for key, value in response.protected_values.items():
+            if key in protected_values and protected_values[key] != value:
+                self.state.last_error_code = CriticalFailureCode.INVALID_INTERNAL_STATE.value
+                record(
+                    Event.OPERATION_FAILED,
+                    self.state.session_id,
+                    error_code=self.state.last_error_code,
+                )
+                return CriticalFailure(code=CriticalFailureCode.INVALID_INTERNAL_STATE)
+            protected_values[key] = value
+        return response.model_copy(
+            update={
+                "directives": (*prefix.directives, *response.directives),
+                "protected_values": protected_values,
+            }
+        )
 
-    async def _specialist(self, result: TurnResult) -> str:
+    async def _specialist(self, result: TurnResult) -> FlowOutcome | CriticalFailure:
         if self.state.current_agent == AgentType.CREDIT:
             return await self._credit(result)
         if self.state.current_agent == AgentType.EXCHANGE:
@@ -229,10 +297,26 @@ class BankingFlow(Flow[SessionState]):
         raise LLMStructuredOutputError()
 
     @staticmethod
+    def _outcome(
+        specialist: AgentType,
+        *events: ResponseEvent,
+        protected_values: dict[str, str] | None = None,
+        next_step: NextStep = NextStep.IDLE,
+        expected_questions: int = 0,
+    ) -> FlowOutcome:
+        return FlowOutcome(
+            directives=tuple(OutcomeDirective(event=event) for event in events),
+            specialist=specialist,
+            protected_values=protected_values or {},
+            next_step=next_step,
+            expected_questions=expected_questions,
+        )
+
+    @staticmethod
     def _money(value) -> str:
         return "R$ " + f"{value:,.2f}".replace(",", "_").replace(".", ",").replace("_", ".")
 
-    async def _credit(self, result: CreditTurnResult) -> str:
+    async def _credit(self, result: CreditTurnResult) -> FlowOutcome | CriticalFailure:
         if (
             result.transition_request == TransitionIntent.GO_TO_EXCHANGE
             or result.detected_intent == IntentType.EXCHANGE_RATE
@@ -250,21 +334,34 @@ class BankingFlow(Flow[SessionState]):
             transition(self.state, TransitionIntent.START_CREDIT_INTERVIEW, accepted=True)
             credit.awaiting_interview_confirmation = False
             self.state.interview = CreditInterviewContext()
-            return (
-                "Vamos olhar sua situação com mais cuidado. "
-                "São **cinco perguntas rápidas**, uma de cada vez.\n\n" + self._interview_question()
+            question = self._interview_question_outcome()
+            return question.model_copy(
+                update={
+                    "directives": (
+                        OutcomeDirective(event=ResponseEvent.INTERVIEW_STARTED),
+                        *question.directives,
+                    )
+                }
             )
         if result.transition_request == TransitionIntent.START_CREDIT_INTERVIEW:
             # Pedir a transição sem aceite explícito não autoriza iniciar a entrevista.
             transition(self.state, result.transition_request, accepted=False)
         if result.interview_accepted is False and credit.awaiting_interview_confirmation:
             credit.awaiting_interview_confirmation = False
-            return self._complete_operation("Tudo bem. Podemos deixar a entrevista para depois.")
+            return self._complete_operation(
+                self._outcome(
+                    AgentType.CREDIT,
+                    ResponseEvent.CREDIT_INCREASE_REJECTED_FINAL,
+                )
+            )
         if result.detected_intent == IntentType.CREDIT_LIMIT_QUERY:
             limit = await self._tools.execute("get_credit_limit")
             return self._complete_operation(
-                f"Seu limite de crédito atual é **{self._money(limit)}**.\n\n"
-                "Se quiser, também posso avaliar um aumento para você."
+                self._outcome(
+                    AgentType.CREDIT,
+                    ResponseEvent.CREDIT_LIMIT_FOUND,
+                    protected_values={"current_limit": self._money(limit)},
+                )
             )
         if result.detected_intent == IntentType.CREDIT_LIMIT_INCREASE:
             credit.awaiting_requested_limit = True
@@ -274,40 +371,41 @@ class BankingFlow(Flow[SessionState]):
             credit.awaiting_requested_limit = True
         if credit.awaiting_requested_limit:
             if result.requested_limit is None and credit.requested_limit is None:
-                return (
-                    "Qual **limite total** você gostaria de ter?\n\n"
-                    "Me diga o valor final desejado, não apenas quanto quer acrescentar."
+                return self._outcome(
+                    AgentType.CREDIT,
+                    ResponseEvent.REQUEST_CREDIT_LIMIT,
+                    next_step=NextStep.AWAIT_REQUESTED_LIMIT,
+                    expected_questions=1,
                 )
             return await self._evaluate_credit()
         if credit.awaiting_interview_confirmation:
-            return (
-                "Quer seguir com a **entrevista financeira** para reavaliar seu pedido?\n\n"
-                "Pode responder **sim** ou **não**. "
-                "Se preferir, também podemos consultar uma cotação."
+            return self._outcome(
+                AgentType.CREDIT,
+                ResponseEvent.CREDIT_INCREASE_REJECTED_OFFER_INTERVIEW,
+                next_step=NextStep.AWAIT_INTERVIEW_CONFIRMATION,
+                expected_questions=1,
             )
-        return "Como posso ajudar agora?\n\n" + OPTIONS
+        return self._outcome(
+            AgentType.TRIAGE,
+            ResponseEvent.SHOW_OPTIONS,
+            expected_questions=1,
+        )
 
-    def _interview_question(self) -> str:
-        questions = {
-            "monthly_income": "Para começar, qual é sua **renda mensal**?",
-            "employment_type": (
-                "E como está sua **situação de trabalho** hoje?\n\n"
-                "- Emprego formal, como CLT\n- Trabalho autônomo\n- Sem emprego no momento"
+    def _interview_question_outcome(self) -> FlowOutcome:
+        field = self.state.interview.next_missing_field()
+        return FlowOutcome(
+            directives=(
+                OutcomeDirective(
+                    event=ResponseEvent.INTERVIEW_QUESTION,
+                    public_context={"field": field},
+                ),
             ),
-            "fixed_expenses": (
-                "Quanto somam suas **despesas fixas por mês**, como aluguel, contas e alimentação?"
-            ),
-            "dependents": (
-                "Quantas pessoas **dependem financeiramente de você**? Se nenhuma, diga **0**."
-            ),
-            "has_active_debt": (
-                "Falta só uma pergunta: você tem alguma **dívida ativa**?\n\n"
-                "Pode responder **sim** ou **não**."
-            ),
-        }
-        return questions[self.state.interview.next_missing_field()]
+            specialist=AgentType.INTERVIEW,
+            next_step=NextStep.AWAIT_INTERVIEW_FIELD,
+            expected_questions=1,
+        )
 
-    def _complete_operation(self, response: str) -> str:
+    def _complete_operation(self, response: FlowOutcome) -> FlowOutcome:
         self.state.pending_intent = None
         self.state.pending_currency = None
         self.state.credit.requested_limit = None
@@ -317,7 +415,7 @@ class BankingFlow(Flow[SessionState]):
         transition(self.state, TransitionIntent.RETURN_TO_TRIAGE, operation_completed=True)
         return response
 
-    async def _interview(self, result: InterviewTurnResult) -> str:
+    async def _interview(self, result: InterviewTurnResult) -> FlowOutcome | CriticalFailure:
         interview = self.state.interview
         if interview is None:
             raise LLMStructuredOutputError()
@@ -325,10 +423,10 @@ class BankingFlow(Flow[SessionState]):
         if field is not None:
             value = getattr(result, field)
             if value is None:
-                return self._interview_question()
+                return self._interview_question_outcome()
             setattr(interview, field, value)
         if not interview.is_complete():
-            return self._interview_question()
+            return self._interview_question_outcome()
         await self._tools.execute("submit_credit_interview")
         interview.score_persisted = True
         interview.completed = True
@@ -339,12 +437,25 @@ class BankingFlow(Flow[SessionState]):
         self._checkpoint()
         return await self._evaluate_credit()
 
-    async def _evaluate_credit(self) -> str:
+    async def _evaluate_credit(self) -> FlowOutcome | CriticalFailure:
         credit = self.state.credit
         is_reanalysis = credit.reanalysis_pending
-        result = await self._tools.execute(
-            "request_credit_limit_increase", requested_limit=credit.requested_limit
-        )
+        try:
+            result = await self._tools.execute(
+                "request_credit_limit_increase", requested_limit=credit.requested_limit
+            )
+        except InvalidCreditLimitError as exc:
+            credit.requested_limit = None
+            credit.awaiting_requested_limit = True
+            self.state.last_error_code = exc.code
+            record(Event.OPERATION_FAILED, self.state.session_id, error_code=exc.code)
+            return self._outcome(
+                AgentType.CREDIT,
+                ResponseEvent.INVALID_INPUT,
+                ResponseEvent.RESUME_PENDING_STEP,
+                next_step=NextStep.AWAIT_REQUESTED_LIMIT,
+                expected_questions=1,
+            )
         credit.last_request_status = result.status_pedido
         record(Event.CREDIT_REQUEST_EVALUATED, self.state.session_id, status=result.status_pedido)
         credit.awaiting_requested_limit = False
@@ -353,36 +464,32 @@ class BankingFlow(Flow[SessionState]):
             result.status_pedido == CreditRequestStatus.REJECTED and not interview_completed
         )
         if result.status_pedido == CreditRequestStatus.APPROVED:
-            if is_reanalysis:
-                return self._complete_operation(
-                    "Obrigada por responder às perguntas. Com as informações atualizadas, "
-                    "seu pedido foi **aprovado**.\n\n"
-                    f"Seu novo limite é **{self._money(result.novo_limite_solicitado)}** "
-                    "e já está disponível."
+            return self._complete_operation(
+                self._outcome(
+                    AgentType.CREDIT,
+                    ResponseEvent.INTERVIEW_REANALYSIS_APPROVED
+                    if is_reanalysis
+                    else ResponseEvent.CREDIT_INCREASE_APPROVED,
+                    protected_values={"new_limit": self._money(result.novo_limite_solicitado)},
                 )
-            return self._complete_operation(
-                "Boa notícia: seu pedido foi **aprovado**.\n\n"
-                f"Seu novo limite é **{self._money(result.novo_limite_solicitado)}** "
-                "e já está disponível."
             )
-        if is_reanalysis:
+        if is_reanalysis or interview_completed:
             return self._complete_operation(
-                "Obrigada por responder às perguntas. Mesmo com as informações atualizadas, "
-                "não consegui aprovar esse valor agora. Seu limite atual continua o mesmo.\n\n"
-                "Se quiser, posso consultar seu limite ou ajudar com uma cotação."
+                self._outcome(
+                    AgentType.CREDIT,
+                    ResponseEvent.INTERVIEW_REANALYSIS_REJECTED
+                    if is_reanalysis
+                    else ResponseEvent.CREDIT_INCREASE_REJECTED_FINAL,
+                )
             )
-        if interview_completed:
-            return self._complete_operation(
-                "Não consegui aprovar esse valor agora, então seu limite continua o mesmo.\n\n"
-                "Se quiser, posso consultar seu limite ou ajudar com uma cotação."
-            )
-        return (
-            "Não consegui aprovar esse valor agora, então seu limite continua o mesmo.\n\n"
-            "Podemos fazer uma **entrevista financeira rápida** e analisar novamente com "
-            "informações atualizadas. **Quer continuar?** Pode responder sim ou não."
+        return self._outcome(
+            AgentType.CREDIT,
+            ResponseEvent.CREDIT_INCREASE_REJECTED_OFFER_INTERVIEW,
+            next_step=NextStep.AWAIT_INTERVIEW_CONFIRMATION,
+            expected_questions=1,
         )
 
-    async def _exchange(self, result: ExchangeTurnResult) -> str:
+    async def _exchange(self, result: ExchangeTurnResult) -> FlowOutcome | CriticalFailure:
         if result.transition_request == TransitionIntent.GO_TO_CREDIT or result.detected_intent in (
             IntentType.CREDIT_LIMIT_QUERY,
             IntentType.CREDIT_LIMIT_INCREASE,
@@ -396,26 +503,43 @@ class BankingFlow(Flow[SessionState]):
         if result.transition_request not in (None, TransitionIntent.GO_TO_EXCHANGE):
             transition(self.state, result.transition_request)
         if result.currency is None:
-            return (
-                "Qual moeda você gostaria de consultar?\n\n"
-                "- **Dólar** — USD\n- **Euro** — EUR\n- **Libra** — GBP\n\n"
-                "Vou mostrar a cotação de compra em reais."
+            return self._outcome(
+                AgentType.EXCHANGE,
+                ResponseEvent.REQUEST_CURRENCY,
+                next_step=NextStep.AWAIT_CURRENCY,
+                expected_questions=1,
             )
-        quote = await self._tools.execute("get_exchange_rate", currency=result.currency)
+        try:
+            quote = await self._tools.execute("get_exchange_rate", currency=result.currency)
+        except InvalidCurrencyError as exc:
+            self.state.last_error_code = exc.code
+            record(Event.OPERATION_FAILED, self.state.session_id, error_code=exc.code)
+            return self._outcome(
+                AgentType.EXCHANGE,
+                ResponseEvent.UNSUPPORTED_CURRENCY,
+                next_step=NextStep.AWAIT_CURRENCY,
+                expected_questions=1,
+            )
         timestamp = (
             f"\n\nAtualizada em {quote.quoted_at:%d/%m/%Y às %H:%M} UTC." if quote.quoted_at else ""
         )
         interrupted_credit = self.state.credit.awaiting_requested_limit
-        body = (
-            f"**Cotação de {quote.currency}**\n\n"
-            f"**1 {quote.currency} = R$ {quote.bid:.4f}**\n\n"
-            f"Valor de compra em reais.{timestamp}"
-        )
-        if interrupted_credit:
-            body += (
-                "\n\nSeu pedido de aumento ficou interrompido. "
-                "Podemos consultar seu limite para conferir a situação antes de retomar o pedido."
+        return self._complete_operation(
+            FlowOutcome(
+                directives=(
+                    OutcomeDirective(
+                        event=ResponseEvent.EXCHANGE_QUOTE_FOUND,
+                        public_context={"credit_request_interrupted": True}
+                        if interrupted_credit
+                        else {},
+                    ),
+                ),
+                specialist=AgentType.EXCHANGE,
+                protected_values={
+                    "exchange_rate": f"1 {quote.currency} = R$ {quote.bid:.4f}",
+                    "quote_timestamp": timestamp,
+                },
+                next_step=NextStep.IDLE,
+                expected_questions=0,
             )
-        else:
-            body += "\n\nQuer consultar outra moeda ou falar sobre seu limite?"
-        return self._complete_operation(body)
+        )

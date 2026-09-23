@@ -16,3 +16,4 @@ build/
 .uv-cache/
 runtime/
 test-results/
+.worktrees/
