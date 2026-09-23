@@ -32,6 +32,15 @@ class SupportedCurrency(StrEnum):
     GBP = "GBP"
 
 
+class InformationTopic(StrEnum):
+    CAPABILITIES = "capabilities"
+    CREDIT_EVALUATION = "credit_evaluation"
+    CREDIT_INTERVIEW = "credit_interview"
+    AUTHENTICATION = "authentication"
+    SUPPORTED_CURRENCIES = "supported_currencies"
+    INTERNAL_DETAILS = "internal_details"
+
+
 class Customer(Model):
     cpf: CPF
     nome: str = Field(min_length=1)

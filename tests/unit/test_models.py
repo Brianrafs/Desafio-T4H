@@ -3,7 +3,9 @@ from decimal import Decimal
 import pytest
 from pydantic import ValidationError
 
+from banco_agil.models.agent_outputs import OUTPUT_TYPES, TurnResult
 from banco_agil.models.domain import Customer, FinancialProfile, ScoreRange
+from banco_agil.models.responses import UserTone
 from banco_agil.models.state import CreditInterviewContext, SessionState
 
 
@@ -58,3 +60,29 @@ def test_interview_progress_counts_only_confirmed_fields():
     context = CreditInterviewContext(monthly_income=1000, dependents=0)
     assert context.completed_fields() == 2
     assert context.total_fields() == 5
+
+
+def test_every_agent_output_can_classify_service_information():
+    assert "information_topic" in TurnResult.model_fields
+
+
+def test_turn_result_defaults_to_neutral_tone():
+    result = TurnResult()
+    assert result.user_tone is UserTone.NEUTRAL
+
+
+@pytest.mark.parametrize("output_type", [TurnResult, *OUTPUT_TYPES.values()])
+def test_interpreter_result_has_no_message_field(output_type):
+    assert "message" not in output_type.model_fields
+    with pytest.raises(ValidationError):
+        output_type(message="texto não autorizado")
+
+
+def test_turn_result_accepts_known_tone():
+    result = TurnResult(user_tone="concerned")
+    assert result.user_tone is UserTone.CONCERNED
+
+
+def test_turn_result_rejects_unknown_tone():
+    with pytest.raises(ValidationError):
+        TurnResult(user_tone="unknown")

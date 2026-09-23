@@ -46,3 +46,18 @@ def test_interview_return_requires_persistence():
         validate_transition(state, TransitionIntent.RETURN_TO_CREDIT)
     state.interview.score_persisted = True
     validate_transition(state, TransitionIntent.RETURN_TO_CREDIT)
+
+
+def test_completed_interview_cannot_be_started_again_in_same_session():
+    state = SessionState(
+        current_agent=AgentType.CREDIT,
+        authenticated=True,
+        authenticated_customer_cpf="00000000001",
+        interview=CreditInterviewContext(completed=True, score_persisted=True),
+    )
+    state.credit.requested_limit = 4000
+    state.credit.awaiting_interview_confirmation = True
+    state.credit.last_request_status = "rejeitado"
+
+    with pytest.raises(AuthorizationError):
+        validate_transition(state, TransitionIntent.START_CREDIT_INTERVIEW, accepted=True)

@@ -1,35 +1,28 @@
 import pytest
 
-from banco_agil.presentation import WELCOME, with_lia_voice
-
-
-def test_lia_presents_capabilities_in_markdown():
-    assert "**Lia**" in WELCOME
-    assert "\n\n- **" in WELCOME
-    for capability in ("Consultar", "aumento", "cotação"):
-        assert capability in WELCOME
-
-
-def test_contextual_acknowledgement_preserves_authoritative_body():
-    body = "Seu limite é **R$ 1.000,00**."
-    assert with_lia_voice(body, "Entendo sua dúvida, vamos olhar isso juntos.") == (
-        "Entendo sua dúvida, vamos olhar isso juntos.\n\n" + body
-    )
+from banco_agil.models.responses import FlowOutcome, OutcomeDirective, UserTone
+from banco_agil.responses.briefs import build_response_brief
+from banco_agil.responses.renderer import render_response
 
 
 @pytest.mark.parametrize(
-    "opening",
+    "event,next_step,questions,expected",
     [
-        "Aprovei seu limite!",
-        "Seu score é ótimo",
-        "Entre em https://example.com",
-        "Seu limite é R$ 9999",
-        "Informe seu CPF",
-        "Entendido, vamos aumentar seu limite.",
-        "<script>alert()</script>",
+        ("welcome", "idle", 1, ("**Lia**", "Consultar", "aumento", "cotação")),
+        ("show_options", "idle", 1, ("Consultar", "aumento", "cotação")),
+        ("conversation_closed", "finished", 0, ("encerrada", "Nova conversa")),
     ],
 )
-def test_acknowledgement_cannot_replace_facts_or_ask_for_credentials(opening):
-    assert with_lia_voice("Resultado confirmado pelo serviço.", opening) == (
-        "Resultado confirmado pelo serviço."
+def test_catalog_fallback_preserves_capabilities_and_closure(event, next_step, questions, expected):
+    outcome = FlowOutcome(
+        directives=(OutcomeDirective(event=event),),
+        specialist="triage",
+        next_step=next_step,
+        expected_questions=questions,
     )
+    response = render_response(outcome, build_response_brief(outcome, UserTone.NEUTRAL), None)
+
+    assert response.used_fallback
+    assert response.text.count("?") == questions
+    for phrase in expected:
+        assert phrase in response.text

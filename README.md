@@ -6,7 +6,7 @@
 
 Atendimento bancário conversacional com quatro especialistas CrewAI, estado explícito e regras financeiras determinísticas. A interface Streamlit reúne autenticação, crédito, entrevista financeira e câmbio em uma conversa contínua.
 
-A assistente se chama **Lia** em todas as etapas. Suas mensagens usam Markdown, acolhimento contextual e opções claras. Ao concluir uma consulta, aprovar um pedido ou recusar a entrevista, ela apresenta os próximos serviços e preserva a autenticação. Atalhos no chat permitem consultar limite, pedir aumento ou escolher uma cotação.
+A assistente se chama **Lia** em todas as etapas. Suas mensagens usam Markdown e respostas curtas, com acolhimento apenas quando o contexto pede. Ao concluir uma operação, ela sugere um próximo passo relacionado em vez de repetir o menu completo. Atalhos no chat continuam disponíveis para consultar limite, pedir aumento ou escolher uma cotação.
 
 
 ### Limitações
@@ -36,12 +36,12 @@ flowchart TD
 - **Agents:** triagem, crédito, entrevista e câmbio têm responsabilidades, schemas e conjuntos de tools próprios. Não recebem o CPF autenticado no contexto do prompt nem tabelas de decisão financeira.
 - **GroqProvider:** usa `BaseLLM` do CrewAI com HTTP via `httpx`, temperatura 0,2 e JSON validado localmente. A API recebe um contrato JSON separado do prompt ReAct do executor. Há no máximo duas chamadas por turno: a inicial e uma repetição por output inválido, geração truncada ou HTTP 400 com `json_validate_failed`. Outros erros HTTP não são repetidos. HTTP 429 recebe a classificação `llm_rate_limited` e uma orientação para aguardar, preservando a sessão.
 - **Tools:** as mesmas tools tipadas são vinculadas aos agentes e ao Flow. Na fase de interpretação, executar uma tool é recusado. Após validar o turno, o Flow libera a chamada; a tool delega ao service e verifica novamente sessão, agente e etapa. O modelo não pode fornecer CPF a operações de crédito.
-- **Flow:** preserva intenção antes da autenticação, controla a matriz de transições, aceita somente o campo aguardado na entrevista e reanalisa automaticamente o valor anterior. Não depende de frases exatas do LLM. Respostas operacionais usam resultados determinísticos para exibir valores e decisões.
+- **Flow:** preserva intenção antes da autenticação, controla a matriz de transições, aceita somente o campo aguardado na entrevista e reanalisa automaticamente o valor anterior. Cada sessão permite uma entrevista concluída; a reanálise encerra o ciclo mesmo quando o pedido continua rejeitado. O Flow não depende de frases exatas do LLM, e respostas operacionais usam resultados determinísticos para exibir valores e decisões.
 - **Services:** comparam credenciais, avaliam crédito, calculam score e consultam câmbio. Valores monetários usam `Decimal`.
 - **Repositories:** validam os CSVs e escrevem arquivos temporários no mesmo diretório, com `flush`, `fsync` e `os.replace`.
 - **Sessão:** autenticação e progresso ficam no `SessionState`; o histórico exibido fica em `st.session_state.messages`. Nenhum dos dois substitui a persistência do domínio.
 
-O retorno `return_to_triage` só é autorizado pelo Flow ao concluir a operação, sem campos pendentes. Rejeições continuam na etapa de crédito aguardando aceite da entrevista. A última resposta da Lia acompanha a mensagem atual para dar contexto a respostas curtas; credenciais de turnos anteriores não são reenviadas. A frase de acolhimento pode variar com a mensagem do cliente; valores, decisões e próximos passos são apresentados a partir do resultado confirmado pelo Flow.
+O retorno `return_to_triage` só é autorizado pelo Flow ao concluir a operação, sem campos pendentes. A primeira rejeição pode aguardar o aceite da entrevista; depois de uma entrevista concluída, a aprovação ou rejeição retorna ao atendimento geral sem novo convite na mesma sessão. A última resposta da Lia acompanha a mensagem atual para dar contexto a respostas curtas; credenciais de turnos anteriores não são reenviadas. O acolhimento fica vazio por padrão e só aparece quando acrescenta contexto; valores, decisões e próximos passos vêm do resultado confirmado pelo Flow.
 
 ### Estrutura
 
@@ -67,7 +67,7 @@ tests/                     Unitários, Flow, tools, integrações e UI
 
 - Autenticação progressiva com CPF e nascimento fictícios; encerramento após três falhas completas.
 - Consulta de limite e pedidos de aumento, com aprovação ou rejeição determinística e histórico persistido.
-- Entrevista de cinco perguntas após rejeição e aceite explícito, com indicador **Entrevista financeira · etapa X de 5**, novo score e reanálise automática.
+- Entrevista de cinco perguntas após rejeição e aceite explícito, com etapa e barra de progresso dentro da resposta mais recente da Lia, novo score e reanálise automática. Uma entrevista concluída não é oferecida novamente na mesma sessão.
 - Cotações de USD, EUR e GBP em reais, com recuperação de falhas transitórias.
 - Conversa contínua com Lia, respostas em Markdown e atalhos para novas operações.
 - Status **Identidade confirmada** sem CPF e aviso visível de que as mensagens do chat são processadas pela Groq.
@@ -80,7 +80,7 @@ tests/                     Unitários, Flow, tools, integrações e UI
 
 O contrato JSON enviado à Groq foi separado das instruções ReAct do executor. Pydantic valida o retorno; `json_validate_failed`, truncamento ou output inválido permitem somente uma nova tentativa. Outputs de um especialista incompatível registram um código seguro, sem alterar o restante da sessão. Checkpoints preservam dados já confirmados em falhas posteriores.
 
-Handoffs são internos ao Flow. Lia mantém a mesma identidade, apresenta os próximos serviços após cada operação e não exige autenticação novamente na mesma sessão. Aceites ambíguos mantêm a confirmação da entrevista pendente.
+Handoffs são internos ao Flow. Lia mantém a mesma identidade, usa próximos passos ligados ao resultado e não exige autenticação novamente na mesma sessão. Aceites ambíguos mantêm a confirmação da entrevista pendente.
 
 ### Crédito e recuperação de falhas
 
@@ -89,7 +89,7 @@ Um aumento só é aprovado se o valor solicitado superar o limite atual e respei
 
 Como dois CSVs não formam uma transação, pedidos pendentes são reconciliados antes de novas operações de crédito ou alterações de score. Se o cliente ainda tem o limite original, a avaliação é retomada; se já tem o limite solicitado, a aprovação é finalizada. Uma repetição imediata do mesmo pedido recuperado não cria outra linha. Um limite incompatível com ambos bloqueia a operação com erro controlado. Esse mecanismo pressupõe um único escritor e não oferece segurança para sessões concorrentes.
 
-A entrevista persiste o score antes de retornar ao crédito. Se a reanálise falhar, os dados já confirmados e a etapa concluída são mantidos para permitir retomada.
+A entrevista persiste o score antes de retornar ao crédito. Se a reanálise falhar por erro técnico, os dados já confirmados e a etapa concluída são mantidos para permitir retomada. Se a reanálise terminar em rejeição, o fluxo volta à triagem e não oferece outra entrevista na mesma sessão; uma recusa anterior, sem entrevista realizada, não consome essa possibilidade.
 
 ### Câmbio e privacidade
 
