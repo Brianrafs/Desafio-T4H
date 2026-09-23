@@ -230,6 +230,7 @@ NO_APPROVAL = (
 NO_REJECTION = (
     r"\b(?:rejeit|reprov|neg|recus)(?:ad[oa]s?|amos|ou|ei|am)\b",
     r"\bn[aã]o\s+(?:(?:foi|est[aá]|consegui|conseguimos|pude|podemos)\s+)?aprov\w*\b",
+    r"\bn[aã]o\s+(?:ser[aá]|seria)\s+(?:poss[ií]vel|vi[aá]vel)\s+aprov\w*\b",
 )
 
 EVENT_DEFINITIONS: dict[ResponseEvent, EventDefinition] = {

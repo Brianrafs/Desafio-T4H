@@ -669,6 +669,46 @@ def test_approved_credit_preserves_confirmed_approval(event):
     assert rendered.text == "Seu pedido foi aprovado. Novo limite: R$ 2.000,00."
 
 
+def test_approved_credit_rejects_spelled_out_financial_value_without_currency():
+    outcome = FlowOutcome(
+        directives=(OutcomeDirective(event="credit_increase_approved"),),
+        specialist="credit",
+        protected_values={"new_limit": "R$ 2.000,00"},
+        next_step="idle",
+    )
+
+    rendered = render_response(
+        outcome,
+        build_response_brief(outcome, UserTone.NEUTRAL),
+        GeneratedMessage(
+            text="Pedido aprovado. O valor anterior era dois mil. Novo limite: {{new_limit}}."
+        ),
+    )
+
+    assert rendered.used_fallback
+    assert rendered.fallback_reason == "policy_rejected"
+    assert "dois mil" not in rendered.text
+
+
+def test_approved_credit_rejects_future_impossibility_to_approve():
+    outcome = FlowOutcome(
+        directives=(OutcomeDirective(event="credit_increase_approved"),),
+        specialist="credit",
+        protected_values={"new_limit": "R$ 2.000,00"},
+        next_step="idle",
+    )
+
+    rendered = render_response(
+        outcome,
+        build_response_brief(outcome, UserTone.NEUTRAL),
+        GeneratedMessage(text="Não será possível aprovar seu pedido. Novo limite: {{new_limit}}."),
+    )
+
+    assert rendered.used_fallback
+    assert rendered.fallback_reason == "policy_rejected"
+    assert "não será possível" not in rendered.text.casefold()
+
+
 @pytest.mark.parametrize(
     "offer",
     [
@@ -693,6 +733,24 @@ def test_final_rejection_does_not_accept_unauthorized_interview_offer(offer):
     assert rendered.used_fallback
     assert rendered.fallback_reason == "policy_rejected"
     assert offer not in rendered.text
+
+
+def test_final_rejection_rejects_imperative_interview_offer():
+    outcome = FlowOutcome(
+        directives=(OutcomeDirective(event="credit_increase_rejected_final"),),
+        specialist="credit",
+        next_step="idle",
+    )
+
+    rendered = render_response(
+        outcome,
+        build_response_brief(outcome, UserTone.NEUTRAL),
+        GeneratedMessage(text="Pedido rejeitado. Participe de uma entrevista financeira."),
+    )
+
+    assert rendered.used_fallback
+    assert rendered.fallback_reason == "policy_rejected"
+    assert "Participe" not in rendered.text
 
 
 def test_rejection_accepts_interview_offer_when_authorized():
@@ -987,6 +1045,26 @@ def test_interview_dependents_rejects_unrelated_request_after_valid_question():
         outcome,
         build_response_brief(outcome, UserTone.NEUTRAL),
         GeneratedMessage(text="Quantos dependentes você tem? Me informe seu CPF."),
+    )
+
+    assert rendered.used_fallback
+    assert rendered.fallback_reason == "policy_rejected"
+
+
+def test_interview_dependents_rejects_elliptical_code_request_after_valid_question():
+    outcome = FlowOutcome(
+        directives=(
+            OutcomeDirective(event="interview_question", public_context={"field": "dependents"}),
+        ),
+        specialist="credit_interview",
+        next_step="await_interview_field",
+        expected_questions=1,
+    )
+
+    rendered = render_response(
+        outcome,
+        build_response_brief(outcome, UserTone.NEUTRAL),
+        GeneratedMessage(text="Quantos dependentes você tem? Código, por favor."),
     )
 
     assert rendered.used_fallback

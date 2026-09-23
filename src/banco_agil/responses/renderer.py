@@ -33,6 +33,12 @@ from banco_agil.responses.catalog import (
 PLACEHOLDER_PATTERN = re.compile(r"\{\{([a-z][a-z0-9_]*)\}\}")
 FINANCIAL_LITERAL_PATTERN = re.compile(
     r"[$€£¥%]|\bpor\s+cento\b|"
+    r"\b(?:um|uma|dois|duas|tr[eê]s|quatro|cinco|seis|sete|oito|nove|dez|"
+    r"onze|doze|treze|catorze|quatorze|quinze|dezesseis|dezessete|dezoito|dezenove|"
+    r"vinte|trinta|quarenta|cinquenta|sessenta|setenta|oitenta|noventa|cem|cento|"
+    r"duzent[oa]s|trezent[oa]s|quatrocent[oa]s|quinhent[oa]s|seiscent[oa]s|"
+    r"setecent[oa]s|oitocent[oa]s|novecent[oa]s)\s+"
+    r"(?:mil|milh(?:ão|ões)|bilh(?:ão|ões))\b|"
     r"\b(?:zero|um|uma|dois|duas|tr[eê]s|quatro|cinco|seis|sete|oito|nove|dez|"
     r"onze|doze|treze|catorze|quatorze|quinze|dezesseis|dezessete|dezoito|dezenove|"
     r"vinte|trinta|quarenta|cinquenta|sessenta|setenta|oitenta|noventa|cem|cento|"
@@ -43,7 +49,7 @@ FINANCIAL_LITERAL_PATTERN = re.compile(
 )
 UNSAFE_LITERAL_PATTERN = re.compile(r"https?://|www\.|(?<!\d)\d{11}(?!\d)", re.IGNORECASE)
 INTERVIEW_OFFER_PATTERN = re.compile(
-    r"\b(?:podemos|posso|ofere[cç]\w*|inici\w*|come[cç]\w*|faça|fazer|vamos)\b"
+    r"\b(?:podemos|posso|ofere[cç]\w*|inici\w*|come[cç]\w*|particip\w*|faça|fazer|vamos)\b"
     r"[^.!?\n]*\bentrevista\b|"
     r"\b(?:nova|outra)\s+entrevista\b|"
     r"\bentrevista\b[^.!?\n]*\bdispon[ií]vel\b",
@@ -211,6 +217,8 @@ def _question_is_authorized(text: str, outcome: FlowOutcome) -> bool:
     if CREDENTIAL_PATTERN.search(text):
         return False
     subjects = _authorized_question_subject(outcome)
+    if subjects and re.search(r"\bc[oó]digos?\b", text, re.IGNORECASE):
+        return False
     if any(item.event == ResponseEvent.INTERVIEW_QUESTION for item in outcome.directives) and any(
         re.search(QUESTION_SUBJECTS[subject], text, re.IGNORECASE)
         for subject in SENSITIVE_QUESTION_SUBJECTS - subjects
