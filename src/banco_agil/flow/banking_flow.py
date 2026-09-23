@@ -275,6 +275,7 @@ class BankingFlow(Flow[SessionState]):
         self.state.credit.requested_limit = None
         self.state.credit.awaiting_requested_limit = False
         self.state.credit.awaiting_interview_confirmation = False
+        self.state.credit.reanalysis_pending = False
         transition(self.state, TransitionIntent.RETURN_TO_TRIAGE, operation_completed=True)
         return response
 
@@ -296,11 +297,13 @@ class BankingFlow(Flow[SessionState]):
         record(Event.CREDIT_SCORE_UPDATED, self.state.session_id)
         transition(self.state, TransitionIntent.RETURN_TO_CREDIT)
         self.state.credit.awaiting_requested_limit = True
+        self.state.credit.reanalysis_pending = True
         self._checkpoint()
         return await self._evaluate_credit()
 
     async def _evaluate_credit(self) -> str:
         credit = self.state.credit
+        is_reanalysis = credit.reanalysis_pending
         result = await self._tools.execute(
             "request_credit_limit_increase", requested_limit=credit.requested_limit
         )
@@ -312,7 +315,7 @@ class BankingFlow(Flow[SessionState]):
             result.status_pedido == CreditRequestStatus.REJECTED and not interview_completed
         )
         if result.status_pedido == CreditRequestStatus.APPROVED:
-            if interview_completed:
+            if is_reanalysis:
                 return self._complete_operation(
                     "Obrigada por responder às perguntas. Com as informações atualizadas, "
                     "seu pedido foi **aprovado**.\n\n"
@@ -324,10 +327,15 @@ class BankingFlow(Flow[SessionState]):
                 f"Seu novo limite é **{self._money(result.novo_limite_solicitado)}** "
                 "e já está disponível."
             )
-        if interview_completed:
+        if is_reanalysis:
             return self._complete_operation(
                 "Obrigada por responder às perguntas. Mesmo com as informações atualizadas, "
                 "não consegui aprovar esse valor agora. Seu limite atual continua o mesmo.\n\n"
+                "Se quiser, posso consultar seu limite ou ajudar com uma cotação."
+            )
+        if interview_completed:
+            return self._complete_operation(
+                "Não consegui aprovar esse valor agora, então seu limite continua o mesmo.\n\n"
                 "Se quiser, posso consultar seu limite ou ajudar com uma cotação."
             )
         return (

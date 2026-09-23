@@ -181,6 +181,35 @@ async def test_completed_interview_is_not_offered_again_in_same_session(data_dir
     assert "entrevista financeira" not in response.casefold()
 
 
+async def test_later_approved_request_is_not_described_as_interview_reanalysis(data_dir):
+    flow = BankingFlow(data_dir)
+    await flow.process(
+        TriageTurnResult(
+            cpf="00000000001",
+            birth_date="1990-01-15",
+            detected_intent="credit_limit_increase",
+            requested_limit=15000,
+        )
+    )
+    await flow.process(CreditTurnResult(interview_accepted=True))
+    for values in [
+        dict(monthly_income=10000),
+        dict(employment_type="formal"),
+        dict(fixed_expenses=1000),
+        dict(dependents=0),
+        dict(has_active_debt=False),
+    ]:
+        await flow.process(InterviewTurnResult(**values))
+
+    response = await flow.process(
+        TriageTurnResult(detected_intent="credit_limit_increase", requested_limit=4000)
+    )
+
+    assert flow.state.credit.last_request_status == "aprovado"
+    assert "responder às perguntas" not in response.casefold()
+    assert "informações atualizadas" not in response.casefold()
+
+
 async def test_declined_interview_can_be_offered_after_another_rejected_request(data_dir):
     flow = await rejected_flow(data_dir)
     await flow.process(CreditTurnResult(interview_accepted=False))

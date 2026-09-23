@@ -45,6 +45,9 @@ def test_acknowledgement_cannot_replace_facts_or_ask_for_credentials(opening):
         "Vamos lá!",
         "Combinado.",
         "Vamos conferir isso juntos.",
+        "Entendi, claro.",
+        "Certo, obrigada.",
+        "Perfeito, vamos seguir.",
     ],
 )
 def test_generic_acknowledgement_is_not_added_to_every_reply(opening):

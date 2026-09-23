@@ -255,6 +255,36 @@ def test_interview_progress_is_rendered_in_latest_assistant_bubble(data_dir, mon
     assert app.get("progress")[0].proto.value == 0
 
 
+def test_ending_from_sidebar_clears_interview_progress(data_dir, monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "test")
+    flow = BankingFlow(data_dir)
+    app = AppTest.from_file(str(APP), default_timeout=20)
+    app.session_state["conversation"] = Conversation(
+        flow,
+        ScriptedProvider(
+            [
+                TriageTurnResult(
+                    cpf="00000000001",
+                    birth_date="1990-01-15",
+                    detected_intent="credit_limit_increase",
+                    requested_limit=4000,
+                ),
+                CreditTurnResult(interview_accepted=True),
+            ]
+        ),
+    )
+    app.run()
+    app.chat_input[0].set_value("Quero um limite de 4000").run()
+    app.chat_input[0].set_value("Sim").run()
+    assert app.get("progress")
+
+    app.button(key="end_conversation").click().run()
+
+    assert not app.exception
+    assert flow.state.status == "finished"
+    assert not app.get("progress")
+
+
 @pytest.mark.parametrize("error", [RepositoryError(), OSError("private filesystem detail")])
 def test_failed_demo_reset_is_controlled_and_retryable(data_dir, monkeypatch, error):
     from banco_agil.repositories.bootstrap import reset_demo_data

@@ -26,15 +26,23 @@ def with_lia_voice(body: str, acknowledgement: str) -> str:
     """
     opening = acknowledgement.strip()
     normalized = re.sub(r"[^a-zà-ÿ]+", " ", opening.casefold()).strip()
-    generic = {
+    generic_words = {
         "entendi",
+        "entendido",
         "certo",
         "perfeito",
         "claro",
-        "vamos lá",
         "combinado",
-        "vamos conferir isso juntos",
+        "vamos",
+        "lá",
+        "conferir",
+        "isso",
+        "juntos",
+        "seguir",
+        "obrigada",
+        "obrigado",
     }
+    words = set(normalized.split())
     forbidden = (
         r"\d|https?://|www\.|@|[\[\]<>]|\n|"
         r"aprov|reprov|rejeit|autentic|confirm|garant|liber|score|juros|taxa|"
@@ -44,7 +52,7 @@ def with_lia_voice(body: str, acknowledgement: str) -> str:
     )
     if (
         not opening
-        or normalized in generic
+        or (words and words <= generic_words)
         or len(opening) > 220
         or re.search(forbidden, opening, re.IGNORECASE)
     ):

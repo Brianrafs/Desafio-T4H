@@ -10,6 +10,16 @@ from banco_agil.models.state import AgentType, ConversationStatus
 from banco_agil.presentation import WELCOME
 from banco_agil.repositories.bootstrap import reset_demo_data
 
+
+def append_assistant_message(content, progress=None):
+    for message in st.session_state.messages:
+        message.pop("interview_progress", None)
+    assistant_message = {"role": "assistant", "content": content}
+    if progress is not None:
+        assistant_message["interview_progress"] = progress
+    st.session_state.messages.append(assistant_message)
+
+
 st.set_page_config(page_title="Banco Ágil | Atendimento", page_icon=":material/account_balance:")
 st.title("Banco Ágil")
 st.caption("Converse com a Lia · Seu atendimento, em uma conversa.")
@@ -94,7 +104,7 @@ with st.sidebar:
                 st.rerun()
     if st.button("Encerrar atendimento", key="end_conversation", disabled=finished):
         reply = asyncio.run(conversation.send("encerrar"))
-        st.session_state.messages.append({"role": "assistant", "content": reply})
+        append_assistant_message(reply)
         st.rerun()
 
 if not configured:
@@ -172,10 +182,5 @@ if prompt:
             )
             st.progress(progress["completed"] / progress["total"])
         st.markdown(response)
-    for message in st.session_state.messages:
-        message.pop("interview_progress", None)
-    assistant_message = {"role": "assistant", "content": response}
-    if progress is not None:
-        assistant_message["interview_progress"] = progress
-    st.session_state.messages.append(assistant_message)
+    append_assistant_message(response, progress)
     st.rerun()
