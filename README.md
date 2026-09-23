@@ -76,26 +76,27 @@ tests/                     Unitários, Flow, tools, integrações e UI
 
 ## Desafios Enfrentados e Como Foram Resolvidos
 
-### Output estruturado e continuidade
+### 1. Equilibrar autonomia dos agentes e controle determinístico
 
-O contrato JSON enviado à Groq foi separado das instruções ReAct do executor. Pydantic valida o retorno; `json_validate_failed`, truncamento ou output inválido permitem somente uma nova tentativa. Outputs de um especialista incompatível registram um código seguro, sem alterar o restante da sessão. Checkpoints preservam dados já confirmados em falhas posteriores.
+A primeira versão concentrava no Flow parte da formulação das mensagens, deixando a conversa rígida. Transferir toda a condução para o LLM, por outro lado, permitiria que uma interpretação probabilística definisse transições e decisões de crédito. A solução foi dar a triagem, crédito, entrevista e câmbio a responsabilidade de interpretar a intenção, extrair informações e formular respostas naturais. O `BankingFlow` conserva o estado, valida as transições e libera as operações conforme a etapa. Services calculam os resultados financeiros; as tools conferem sessão, agente e fase antes de executar uma ação. Assim, a Lia pode adaptar a conversa sem alterar regras críticas ou depender de frases exatas para avançar.
 
-Handoffs são internos ao Flow. Lia mantém a mesma identidade, usa próximos passos ligados ao resultado e não exige autenticação novamente na mesma sessão. Aceites ambíguos mantêm a confirmação da entrevista pendente.
+### 2. Tornar os outputs do LLM seguros para o fluxo
 
-### Crédito e recuperação de falhas
+Uma resposta do modelo pode chegar incompleta, fora do schema ou incompatível com a etapa da conversa. O contrato JSON enviado à Groq foi separado das instruções ReAct do executor, e os outputs são validados com Pydantic antes de chegar ao Flow. `json_validate_failed`, truncamento e output inválido permitem uma única nova tentativa. Um output incompatível de um especialista gera um erro controlado, sem executar uma tool indevida nem corromper a sessão. Aceites ambíguos não confirmam a entrevista. Os handoffs ficam no Flow, enquanto Lia mantém a mesma identidade e formula o próximo passo a partir do resultado confirmado.
 
+A integração externa de câmbio segue a mesma preocupação com falhas controladas: aceita USD, EUR e GBP, usa timeout de 5 segundos por tentativa e repete uma única vez timeouts, falhas de conexão e HTTP 5xx. HTTP 404 e demais 4xx não são repetidos; um payload inválido resulta em indisponibilidade controlada.
 
-Um aumento só é aprovado se o valor solicitado superar o limite atual e respeitar o teto da faixa de score. A solicitação nasce `pendente`. Para uma aprovação, o limite do cliente é gravado antes da conclusão do status; somente após ambas as escritas há uma resposta de aprovação.
+### 3. Preservar o estado diante de falhas e mudanças de contexto
 
-Como dois CSVs não formam uma transação, pedidos pendentes são reconciliados antes de novas operações de crédito ou alterações de score. Se o cliente ainda tem o limite original, a avaliação é retomada; se já tem o limite solicitado, a aprovação é finalizada. Uma repetição imediata do mesmo pedido recuperado não cria outra linha. Um limite incompatível com ambos bloqueia a operação com erro controlado. Esse mecanismo pressupõe um único escritor e não oferece segurança para sessões concorrentes.
+Um erro posterior não deve apagar informações já confirmadas nem transformar uma operação parcial em aprovação. Checkpoints preservam os fatos confirmados. O Flow mantém a intenção durante a autenticação, controla os campos aguardados na entrevista e permite mudar de assunto sem perder a consistência da etapa. Quando o usuário interrompe um pedido de aumento para consultar câmbio, a conversa explica a interrupção e pode retomar o atendimento de crédito.
 
-A entrevista persiste o score antes de retornar ao crédito. Se a reanálise falhar por erro técnico, os dados já confirmados e a etapa concluída são mantidos para permitir retomada. Se a reanálise terminar em rejeição, o fluxo volta à triagem e não oferece outra entrevista na mesma sessão; uma recusa anterior, sem entrevista realizada, não consome essa possibilidade.
+A persistência em CSV exigiu cuidado adicional: dois arquivos não formam uma transação. Cada pedido de aumento começa como `pendente`. Numa aprovação, o limite do cliente é gravado antes do status final; só após as duas escritas a aplicação responde que aprovou. Pedidos pendentes são reconciliados antes de novas operações de crédito ou mudanças de score: o limite original permite retomar a avaliação, o limite solicitado permite concluir a aprovação e um valor incompatível bloqueia a operação. Uma repetição imediata do mesmo pedido recuperado não cria outra linha. Esse mecanismo pressupõe um único escritor e não dá segurança a sessões concorrentes.
 
-### Câmbio e privacidade
+Na entrevista, o novo score é persistido antes da reanálise. Se essa reanálise falhar por erro técnico, o score e a etapa concluída permanecem para retomada; se terminar em rejeição, o atendimento volta à triagem sem oferecer uma segunda entrevista na mesma sessão. Uma recusa anterior à entrevista não consome essa possibilidade. Logs JSON registram eventos e `session_id`, sem CPF, nascimento, renda, despesas, dívida, prompts ou segredos; o console detalhado do CrewAI e as métricas do Streamlit ficam desabilitados. As mensagens ainda são enviadas à Groq para interpretação e permanecem no histórico da sessão da UI, por isso a demonstração usa dados fictícios.
 
-O serviço aceita USD, EUR e GBP, com timeout de 5 segundos por tentativa. Timeouts, falhas de conexão e HTTP 5xx têm uma única repetição. HTTP 404 e demais 4xx não são repetidos. Payload inválido resulta em indisponibilidade controlada.
+### 4. Garantir precisão nas regras financeiras
 
-Logs JSON registram eventos e `session_id`, sem CPF, nascimento, renda, despesas, dívida, prompts ou segredos. O console detalhado do CrewAI e a coleta de métricas do Streamlit estão desabilitados. Mensagens digitadas são enviadas à Groq para interpretação e permanecem no histórico da sessão da UI; use somente os dados fictícios nesta demonstração.
+A decisão de crédito precisa ser reproduzível mesmo quando o agente interpreta uma solicitação em linguagem livre. A aprovação de aumento exige que o valor solicitado seja maior que o limite atual e esteja dentro do teto da faixa de score. As faixas são validadas na inicialização para cobrir continuamente scores de 0 a 1000, sem lacunas. Os cálculos monetários usam `Decimal`, e score, limites e decisões ficam nos services e repositories, fora do prompt e da decisão do LLM. Os testes exercitam aprovação, rejeição, entrevista, reanálise e falhas de escrita para verificar essas garantias.
 
 ## Escolhas Técnicas e Justificativas
 
